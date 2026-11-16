@@ -10,7 +10,7 @@
 
   // ---------- Speicher ----------
   function seed() {
-    return { v: 1, wines: SEED_WINES.map((w) => ({ ...w, addedAt: Date.now() })), tastings: [] };
+    return { v: 1, wines: SEED_WINES.map((w) => ({ ...w, addedAt: Date.now() })), tastings: [], school: { right: {}, lessons: {} } };
   }
   function load() {
     try {
@@ -24,11 +24,13 @@
     } catch (e) { return seed(); }
   }
   let S = load();
+  const norm = () => { S.school = S.school || {}; S.school.right = S.school.right || {}; S.school.lessons = S.school.lessons || {}; };
+  norm();
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* Speicher nicht verfügbar */ } }
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
 
   // ---------- UI-Zustand ----------
-  const ui = { tab: 'keller', stack: [], filter: 'alle', searchOpen: false, sommelierWine: null, q: '', expanded: null, draft: null, showCmp: {}, confirmEmpty: null, showEmpty: false, learnOpen: null, sheet: null };
+  const ui = { tab: 'keller', stack: [], filter: 'alle', searchOpen: false, sommelierWine: null, q: '', expanded: null, draft: null, showCmp: {}, confirmEmpty: null, showEmpty: false, learnOpen: null, sheet: null, quiz: null, mini: null, chOpen: null };
 
   // ---------- Helfer ----------
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -109,11 +111,25 @@
     const cols = { rot: '#E9A3B1', dunkel: '#9E7BB0', zitrus: '#F3D46B', obst: '#BFD98A', blumig: '#C9A6E4', kraeuter: '#9CCB9A', wuerze: '#D9A27A', erde: '#B59A7A', mineral: '#AEB9C4', holz: '#C9A27E' };
     return `<div class="ai"><div class="fb" style="background:${cols[a.cat] || '#ddd'}"></div>${imgTag(a.img, 'style="position:absolute"')}</div>`;
   }
+  // Schwebende Leiste: Pille mit 4 Icons + eigener Sommelier-Knopf
+  const DOCK = {
+    keller: '<path d="M10 3.5h4v3.2c0 1.3 2.2 2.2 2.2 5.3v8a1.2 1.2 0 0 1-1.2 1.2H9a1.2 1.2 0 0 1-1.2-1.2v-8c0-3.1 2.2-4 2.2-5.3z"/><path d="M8.3 13.5h7.4v4.2H8.3z"/>',
+    offen: '<path d="M7 3.5h10c.3 5.3-1.6 8.6-5 8.6S6.7 8.8 7 3.5z"/><path d="M7.4 7.2c2.8.8 6.4-.6 9.2.2"/><path d="M12 12.1v7.2"/><path d="M8.4 20.5h7.2"/>',
+    regionen: '<rect x="3.5" y="5.5" width="17" height="13" rx="1.8"/><rect x="14.4" y="8.2" width="3.6" height="4" rx=".4"/><path d="M6.3 10h5.2M6.3 13h5.2M6.3 15.8h3.4"/>',
+    profil: '<path d="M12 3.6l7.3 4.2v8.4L12 20.4l-7.3-4.2V7.8z"/><path d="M12 8.2l3.4 2.3-.9 4.2H9.6l-1-4z"/>'
+  };
+  const dockIcon = (k) => `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${DOCK[k]}</svg>`;
+  const SOMM_SVG = '<svg width="34" height="34" viewBox="0 0 34 34" fill="none" aria-hidden="true"><path d="M6 6h22a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H15l-6 5v-5H6a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3z" fill="#F3E4EA" stroke="#8C1D47" stroke-width="1.6"/><path d="M13.5 10h7c.2 3.4-1.2 5.4-3.5 5.4s-3.7-2-3.5-5.4z" fill="#8C1D47"/><path d="M17 15.4v3.4M15 19.4h4" stroke="#8C1D47" stroke-width="1.5" stroke-linecap="round"/></svg>';
   const tabsHtml = () => {
     const open = S.tastings.filter((t) => !t.done).length;
-    const t = (id, ic, label) => `<button class="${ui.tab === id && !ui.stack.length ? 'on' : ''}" data-act="tab" data-id="${id}">${ic}${label}${id === 'offen' && open ? `<span class="badge">${open}</span>` : ''}</button>`;
-    return `<nav class="tabs">${t('keller', I.wall, 'Keller')}${t('offen', I.glas, 'Offen')}${t('regionen', I.region, 'Regionen')}${t('sommelier', I.chat, 'Sommelier')}${t('profil', I.profil, 'Profil')}</nav>`;
+    const names = { keller: 'Keller', offen: 'Offen', regionen: 'Regionen', profil: 'Profil' };
+    const b = (id) => `<button class="${ui.tab === id ? 'on' : ''}" data-act="tab" data-id="${id}" aria-label="${names[id]}${id === 'offen' && open ? ` (${open} offen)` : ''}">${dockIcon(id)}${id === 'offen' && open ? '<span class="pip"></span>' : ''}</button>`;
+    return `<div class="dock"><nav class="pill">${b('keller')}${b('offen')}${b('regionen')}${b('profil')}</nav>
+      <button class="somm ${ui.tab === 'sommelier' ? 'on' : ''}" data-act="tab" data-id="sommelier" aria-label="Sommelier">${SOMM_SVG}${imgTag(ASSETS.sommelier)}</button></div>`;
   };
+  // Header: Aquarell-Weinberg passend zur Jahreszeit
+  function seasonKey(d = new Date()) { const m = d.getMonth(); return m >= 2 && m <= 4 ? 'fruehling' : m >= 5 && m <= 7 ? 'sommer' : m >= 8 && m <= 10 ? 'lese' : 'winter'; }
+  const headerHtml = () => `<div class="hdr ${seasonKey()}">${imgTag((ASSETS.header || {})[seasonKey()])}</div>`;
 
   // ---------- Etikett (Foto oder gezeichnet) ----------
   const LABEL_STYLES = [
@@ -145,9 +161,9 @@
     const inCellar = S.wines.filter((w) => w.bottles > 0 || openTastingOf(w.id));
     const cnt = (f) => inCellar.filter(f).reduce((n, w) => n + Math.max(1, w.bottles || 0), 0);
     const seg = (id, label) => `<button class="${ui.filter === id ? 'on' : ''}" data-act="filter" data-id="${id}">${label}</button>`;
-    if (!inCellar.length) return `<div class="screen"><div class="top"><div><h1 class="h1">Keller</h1></div><button class="iconbtn primary" data-act="add" aria-label="Flasche hinzufügen">${I.plus}</button></div>
+    if (!inCellar.length) return `${headerHtml()}<div class="screen after-hdr"><div class="top"><div><h1 class="h1">Keller</h1></div><button class="iconbtn primary" data-act="add" aria-label="Flasche hinzufügen">${I.plus}</button></div>
       <div class="emptyart">${imgTag(ASSETS.emptyRack)}<b>Der Keller ist leer</b><span>Zeit für eine neue Bestellung – oder eine Flasche von Hand hinzufügen.</span></div></div>`;
-    return `<div class="screen">
+    return `${headerHtml()}<div class="screen after-hdr">
       <div class="top"><div><div class="kicker">${total} Flaschen${openN ? ` · ${openN} offen` : ''}</div><h1 class="h1">Keller</h1></div>
         <div class="row"><button class="iconbtn" data-act="search" aria-label="Suchen">${I.search}</button><button class="iconbtn primary" data-act="add" aria-label="Flasche hinzufügen">${I.plus}</button></div></div>
       ${ui.searchOpen ? `<label class="search">${I.search}<input id="q" type="search" placeholder="Wein, Winzer, Rebsorte, Region …" value="${esc(ui.q)}" autocomplete="off"></label>` : ''}
@@ -373,7 +389,7 @@
     return `<div class="screen"><div class="top"><div><div class="kicker">Postkarten-Sammlung · ${stamped}/${ids.length} gestempelt</div><h1 class="h1">Deine Regionen</h1></div></div>
       <p class="small" style="color:#4A3F48;margin:-4px 0 14px">Jede Region eine Karte. Verkostest du einen Wein von dort, bekommt sie einen Stempel.</p>
       <div class="pcgrid">${ids.map((id) => { const r = REGIONS[id], u = used[id]; return `<button class="pc ${u.bottles ? '' : 'dim'}" data-act="region" data-id="${id}">
-        <div class="im">${regionImg(id)}${u.tasted ? `<div class="stamp">${I.check}</div>` : ''}</div>
+        <div class="im">${regionImg(id)}${u.tasted ? `<div class="stamp">${I.check}</div>` : ''}${learnedRegions().has(id) ? '<span class="learned">gelernt</span>' : ''}</div>
         <div class="nm"><b>${esc(r.name)}</b><span class="small muted">${esc(r.country)} · ${u.bottles} ${u.bottles === 1 ? 'Flasche' : 'Flaschen'}</span></div></button>`; }).join('')}</div></div>`;
   }
   function sheetRegion(id) {
@@ -430,12 +446,12 @@
     const favBlock = (title, arr) => arr.length ? `<div class="card favs"><b style="font-size:14px">${title}</b>${arr.map(([k, v, c]) => `<div class="f"><span>${esc(k)}</span><div class="bar"><i style="width:${v * 20}%;background:var(--berry)"></i></div><em>${v.toFixed(1).replace('.', ',')}</em></div>`).join('')}</div>` : '';
     return `<div class="screen stack">
       <div><div class="kicker">${nT} ${nT === 1 ? 'Flasche' : 'Flaschen'} verkostet · ${P.all.length} Proben</div><h1 class="h1">Dein Geschmack</h1></div>
+      ${schoolCard()}
       ${P.all.length ? `<div class="card" style="text-align:center">${radar(P.axes)}<div class="small" style="color:#4A3F48;margin-top:4px">${esc(sentence(P.axes))}</div>
         <div class="small muted" style="margin-top:4px">${P.base.length === P.all.length ? 'aus allen Proben' : 'aus den Proben mit 4 oder 5 Punkten'}</div></div>`
         : `<div class="empty">Nach der ersten Verkostung wächst hier dein Profil – Netz, Lieblingsrebsorten, Lieblingsregionen.</div>`}
       ${favBlock('Lieblingsrebsorten', P.grapes)}${favBlock('Lieblingsregionen', P.regions)}
       ${P.top.length ? `<div class="card"><b style="font-size:14px">Was du am häufigsten riechst</b><div class="wrapchips" style="margin-top:8px">${P.top.map(([a, c]) => `<span class="softchip" style="background:var(--bg)">${esc((aroma(a) || {}).label)} · ${c}</span>`).join('')}</div></div>` : ''}
-      <div><h2 style="font-size:17px;margin-bottom:8px">Lernkarten</h2><div class="stack" style="gap:8px">${LEARN.map((l) => `<button class="learn" data-act="learn" data-id="${l.id}"><span>Lernkarte · 1 Min</span><b>${esc(l.title)}</b>${ui.learnOpen === l.id ? `<p>${esc(l.text)}</p>` : ''}</button>`).join('')}</div></div>
       <div class="card"><b style="font-size:14px">Daten</b><div class="small muted" style="margin:4px 0 10px">Alles liegt nur auf diesem Gerät. Ab und zu sichern.</div>
         <div class="btns"><button class="btn" data-act="export">Sichern</button><button class="btn" data-act="import">Einspielen</button></div></div>
     </div>`;
@@ -468,18 +484,228 @@
       <button class="big" data-act="doimport">Einspielen</button><button class="link" style="width:100%" data-act="closesheet">Abbrechen</button></div></div>`;
   }
 
+
+  // ---------- Weinschule ----------
+  const shuffle = (arr) => { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const points = () => Object.keys(S.school.right).length * 10;
+  function rankOf(p = points()) {
+    let i = 0; RANKS.forEach((r, k) => { if (p >= r.min) i = k; });
+    return { i, cur: RANKS[i], next: RANKS[i + 1] || null, p };
+  }
+  const lessonById = (lid) => { for (const c of SCHOOL) for (const l of c.lessons) if (l.id === lid) return { c, l }; return null; };
+  const chapterDone = (c) => c.lessons.filter((l) => S.school.lessons[l.id]).length;
+  function learnedRegions() {
+    const set = new Set();
+    SCHOOL.forEach((c) => c.lessons.forEach((l) => { if (S.school.lessons[l.id] && l.regions) l.regions.forEach((r) => set.add(r)); }));
+    return set;
+  }
+  function rankBlock() {
+    const R = rankOf();
+    const span = R.next ? R.next.min - R.cur.min : 1, pct = R.next ? Math.round(((R.p - R.cur.min) / span) * 100) : 100;
+    return `<div class="card rankcard"><div class="flex-sb"><div><div class="small muted">Dein Rang</div><div class="rankname">${esc(R.cur.name)}</div></div>
+      <span class="small muted">${R.p}${R.next ? ' / ' + R.next.min : ''} Punkte</span></div>
+      <div class="ladder"><span class="rail"></span><span class="rail on" style="width:${(R.i / (RANKS.length - 1)) * 75 + (R.next ? (pct / 100) * (75 / (RANKS.length - 1)) : 0)}%"></span>
+      ${RANKS.map((r, k) => `<div class="${k < R.i ? 'past' : k === R.i ? 'now' : ''}"><i></i><span>${esc(r.name)}</span></div>`).join('')}</div></div>`;
+  }
+  function schoolCard() {
+    const R = rankOf(), done = Object.keys(S.school.lessons).length, all = SCHOOL.reduce((n, c) => n + c.lessons.length, 0);
+    return `<button class="schoolcard" data-act="schule"><span class="sc-ic">${dockIcon('keller')}</span>
+      <span class="sc-t"><b>Weinschule</b><span>${esc(R.cur.name)} · ${R.p} Punkte · ${done}/${all} Lektionen</span></span>${I.back.replace('15,5 8,12 15,19', '9,5 16,12 9,19')}</button>`;
+  }
+  function vSchule() {
+    const nowCh = SCHOOL.find((c) => chapterDone(c) < c.lessons.length);
+    const lr = learnedRegions().size;
+    const node = (st, col) => st === 'done' ? `<span class="nd done" style="background:${col}">${I.check}</span>` : st === 'now' ? `<span class="nd now" style="border-color:${col}"><i style="background:${col}"></i></span>` : '<span class="nd next"></span>';
+    const path = SCHOOL.map((c, ci) => {
+      const d = chapterDone(c), n = c.lessons.length, st = d === n ? 'done' : c === nowCh ? 'now' : 'next';
+      const nextL = c.lessons.find((l) => !S.school.lessons[l.id]);
+      const sub = c.id === 'regionen' && lr ? `${lr} Regionen gelernt` : c.sub;
+      const open = ui.chOpen === c.id;
+      const lessons = open ? `<div class="lessons">${c.lessons.map((l) => { const r = S.school.lessons[l.id]; return `<button class="lrow" data-act="quiz" data-id="${l.id}"><span>${esc(l.title)}</span><em>${r ? `${r.best}/${l.qs.length} ✓` : `${l.qs.length} Fragen`}</em></button>`; }).join('')}</div>` : '';
+      const card = st === 'now' ? `<div class="chcard now" style="border-color:${c.color}"><button class="chhead" data-act="chap" data-id="${c.id}"><b>${esc(c.title)}</b><span>${d} / ${n}</span></button>
+          <div class="bar"><i style="width:${(d / n) * 100}%;background:${c.color}"></i></div>
+          <div class="flex-sb" style="align-items:center"><span class="small" style="color:#4A3F48">Weiter: ${esc(nextL.title)}</span><button class="minibtn" data-act="quiz" data-id="${nextL.id}">Weiter</button></div>${lessons}</div>`
+        : `<div class="chcard ${st}"><button class="chhead" data-act="chap" data-id="${c.id}"><span class="cht"><b>${esc(c.title)}</b><span>${esc(sub)}</span></span><em style="color:${st === 'done' ? c.color : '#9A8F96'}">${d} / ${n}</em></button>${lessons}</div>`;
+      return `<div class="chrow ${st}">${node(st, c.color)}${ci < SCHOOL.length - 1 ? `<span class="chline" style="background:${st === 'done' ? c.color : '#D9CFC9'}"></span>` : ''}${card}</div>`;
+    }).join('');
+    const kn = kellerPool().length;
+    return `<div class="screen stack" style="gap:12px">
+      <button class="backlink" data-act="back">${I.back}Profil</button>
+      <h1 class="h1" style="font-size:30px">Weinschule</h1>
+      ${rankBlock()}
+      ${kn >= 4 ? `<button class="kround" data-act="quiz" data-id="keller"><span class="sc-ic">${dockIcon('keller')}</span><span class="sc-t"><b>Keller-Runde</b><span>${Math.min(8, kn)} Fragen zu deinen eigenen Flaschen</span></span><svg width="22" height="22" viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="M8 5.5v13l10-6.5z"/></svg></button>` : ''}
+      <div class="kicker caps">Dein Lernpfad</div>
+      <div class="path">${path}</div>
+      <p class="small muted" style="margin:4px 2px 0">Jede richtige Antwort zählt einmal 10 Punkte. Kapitel antippen zeigt alle Lektionen.</p>
+    </div>`;
+  }
+
+  // Keller-Runde: Fragen aus deinen eigenen Flaschen
+  const FALLBACK_GRAPES = { rot: ['Tempranillo', 'Pinot Noir', 'Syrah', 'Merlot', 'Garnacha', 'Malbec', 'Cabernet Sauvignon', 'Mencía', 'Nebbiolo', 'Sangiovese'], weiss: ['Riesling', 'Chardonnay', 'Sauvignon Blanc', 'Godello', 'Albariño', 'Grüner Veltliner', 'Chenin Blanc', 'Palomino Fino'] };
+  const mainGrape = (w) => ((w.grapes || '').split(/[,(]/)[0] || '').replace(/\d+\s*%/, '').trim();
+  function kellerPool() {
+    const ws = S.wines.filter((w) => w.bottles > 0 || openTastingOf(w.id));
+    const pool = [];
+    ws.forEach((w) => {
+      const r = REGIONS[w.region], nm = `${w.name} ${w.vintage}`;
+      const g = mainGrape(w);
+      if (g) {
+        const col = w.color === 'weiss' ? 'weiss' : 'rot';
+        const others = [...new Set([...S.wines.filter((o) => (o.color === 'weiss' ? 'weiss' : 'rot') === col).map(mainGrape), ...shuffle(FALLBACK_GRAPES[col])])]
+          .filter((x) => x && x !== g && !(w.grapes || '').includes(x));
+        if (others.length >= 3) pool.push({ t: 'mc', wine: w.id, qid: `k-grape-${w.id}`, q: `Welche Rebsorte prägt deinen ${w.name}?`, a: [g, ...shuffle(others).slice(0, 3)], x: `${w.grapes}.` });
+      }
+      if (r) {
+        const others = shuffle(Object.keys(REGIONS).filter((k) => k !== w.region)).slice(0, 3).map((k) => REGIONS[k].name);
+        pool.push({ t: 'mc', wine: w.id, qid: `k-region-${w.id}`, q: `Woher kommt dein ${nm}?`, a: [r.name, ...others], x: `${r.name}, ${r.country}. ${(r.text || '').split(/(?<=\.)\s/)[0]}` });
+      }
+      if (w.color === 'rot' && typeof w.decant === 'number') {
+        const opts = ['Gar nicht – kurz schwenken reicht', '30–45 Minuten', 'Etwa eine Stunde', '90 Minuten oder länger'];
+        const k = w.decant < 30 ? 0 : w.decant <= 45 ? 1 : w.decant <= 75 ? 2 : 3;
+        pool.push({ t: 'mc', wine: w.id, qid: `k-decant-${w.id}`, q: `Wie lange dekantierst du den ${w.name}?`, a: [opts[k], ...opts.filter((_, i) => i !== k)], x: `Laut Weinkarte: ${decantTxt(w) || 'kein Dekantieren nötig'}.` });
+      }
+      const m = String(w.temp || '').match(/(\d+)(?:\s*[–-]\s*(\d+))?/);
+      if (m) { const lo = +m[1], hi = +(m[2] || m[1]); pool.push({ t: 'temp', wine: w.id, qid: `k-temp-${w.id}`, q: `Bei wie viel Grad servierst du deinen ${w.name}?`, ok: [lo - 1, hi + 1], show: [lo, hi], x: `Laut Weinkarte ${w.temp} °C – ein Grad drüber oder drunter zählt auch.` }); }
+    });
+    return pool;
+  }
+  function kellerRound() {
+    const per = {}, out = [];
+    for (const q of shuffle(kellerPool())) { if ((per[q.wine] || 0) >= 2) continue; per[q.wine] = (per[q.wine] || 0) + 1; out.push(q); if (out.length === 8) break; }
+    return out;
+  }
+  function prep(q, qid) {
+    const base = { ...q, qid: q.qid || qid };
+    if (q.t === 'mc') return { ...base, opts: shuffle(q.a), correct: q.a[0] };
+    if (q.t === 'pair') return { ...base, left: q.pairs.map((p) => p[0]), right: shuffle(q.pairs.map((p) => p[1])), map: Object.fromEntries(q.pairs) };
+    return base;
+  }
+  function startQuiz(id) {
+    let qs, title;
+    if (id === 'keller') { qs = kellerRound(); title = 'Keller-Runde'; }
+    else { const f = lessonById(id); if (!f) return; qs = f.l.qs.map((q, i) => prep(q, `${f.l.id}-${i}`)); title = f.l.title; }
+    qs = qs.map((q) => (q.opts || q.left ? q : prep(q, q.qid)));
+    ui.quiz = { id, title, qs, i: 0, ans: null, right: 0, gained: 0, pair: { sel: null, done: {}, miss: 0, wrong: null }, temp: 14 };
+    const c = current();
+    if (c && c.v === 'quiz') { render(); } else push('quiz', id);
+  }
+  function award(ok, qid) {
+    const Q = ui.quiz;
+    if (ok) { Q.right++; if (!S.school.right[qid]) { S.school.right[qid] = 1; Q.gained += 10; save(); } }
+  }
+  function quizPick(k) {
+    const Q = ui.quiz, q = Q.qs[Q.i]; if (Q.ans) return;
+    const ok = q.opts[k] === q.correct; Q.ans = { ok, pick: k }; award(ok, q.qid); render();
+  }
+  function quizPair(side, k) {
+    const Q = ui.quiz, q = Q.qs[Q.i], P = Q.pair; if (Q.ans) return;
+    P.wrong = null;
+    if (side === 'l') { if (P.done[q.left[k]]) return; P.sel = k; render(); return; }
+    if (P.sel === null) return;
+    const L = q.left[P.sel], R = q.right[k];
+    if (Object.values(P.done).includes(R)) return;
+    if (q.map[L] === R) { P.done[L] = R; P.sel = null; } else { P.miss++; P.wrong = { l: P.sel, r: k }; P.sel = null; }
+    if (Object.keys(P.done).length === q.left.length) { const ok = P.miss === 0; Q.ans = { ok, miss: P.miss }; award(ok, q.qid); }
+    render();
+  }
+  function quizTemp() {
+    const Q = ui.quiz, q = Q.qs[Q.i]; if (Q.ans) return;
+    const ok = Q.temp >= q.ok[0] && Q.temp <= q.ok[1]; Q.ans = { ok, v: Q.temp }; award(ok, q.qid); render();
+  }
+  function quizNext() {
+    const Q = ui.quiz; Q.i++; Q.ans = null; Q.pair = { sel: null, done: {}, miss: 0, wrong: null }; Q.temp = 14;
+    if (Q.i >= Q.qs.length && Q.id !== 'keller') {
+      const prev = S.school.lessons[Q.id]; S.school.lessons[Q.id] = { best: Math.max(Q.right, prev ? prev.best : 0), at: Date.now() }; save();
+    }
+    render();
+  }
+  function vQuiz() {
+    const Q = ui.quiz; if (!Q) return vSchule();
+    const n = Q.qs.length;
+    if (Q.i >= n) {
+      const R = rankOf();
+      return `<div class="screen stack quiz" style="gap:16px">
+        <div class="row"><button class="xbtn" data-act="qclose" aria-label="Schließen"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+        <div class="kicker caps berry">${esc(Q.title)}</div>
+        <div class="result"><b>${Q.right} / ${n}</b><span>richtig</span></div>
+        <div class="card" style="text-align:center"><b style="font-size:18px;color:${Q.gained ? 'var(--ok)' : 'var(--muted)'}">${Q.gained ? `+${Q.gained} Punkte` : 'Keine neuen Punkte'}</b>
+          <div class="small muted" style="margin-top:4px">${Q.gained ? '' : 'Punkte gibt es pro Frage nur beim ersten Mal. '}${R.next ? `Noch ${R.next.min - R.p} bis ${esc(R.next.name)}.` : 'Höchster Rang erreicht.'}</div></div>
+        ${rankBlock()}
+        <div class="btns"><button class="btn" data-act="qagain">Nochmal</button><button class="btn fill" data-act="qclose">Fertig</button></div></div>`;
+    }
+    const q = Q.qs[Q.i], A = Q.ans, w = q.wine ? wine(q.wine) : null;
+    const segs = Q.qs.map((_, k) => `<span class="${k < Q.i || (k === Q.i && A) ? 'on' : ''}"></span>`).join('');
+    let body = '';
+    if (q.t === 'mc') {
+      body = `<div class="opts">${q.opts.map((o, k) => { const cls = !A ? '' : o === q.correct ? 'right' : k === A.pick ? 'wrong' : 'dim'; return `<button class="opt ${cls}" data-act="qpick" data-i="${k}">${esc(o)}${A && o === q.correct ? I.check : ''}</button>`; }).join('')}</div>`;
+    } else if (q.t === 'pair') {
+      const P = Q.pair, idx = (L) => q.left.indexOf(L);
+      const doneR = Object.fromEntries(Object.entries(P.done).map(([l, r]) => [r, idx(l)]));
+      body = `<p class="small muted" style="margin:-6px 0 0">Links antippen, dann das Passende rechts.</p><div class="pairs"><div>${q.left.map((L, k) => `<button class="opt pl ${P.done[L] ? 'matched m' + k : P.sel === k ? 'sel' : P.wrong && P.wrong.l === k ? 'wrong' : ''}" data-act="qpl" data-i="${k}">${esc(L)}</button>`).join('')}</div>
+        <div>${q.right.map((R, k) => `<button class="opt pr ${R in doneR ? 'matched m' + doneR[R] : P.wrong && P.wrong.r === k ? 'wrong' : ''}" data-act="qpr" data-i="${k}">${esc(R)}</button>`).join('')}</div></div>`;
+    } else if (q.t === 'temp') {
+      const lo = 4, hi = 22, pos = (v) => ((v - lo) / (hi - lo)) * 100;
+      body = `<div class="card tempq"><div id="tempVal" class="tempval">${A ? A.v : Q.temp} °C</div>
+        <div class="trk">${A ? `<span class="okband" style="left:${pos(q.ok[0])}%;width:${pos(q.ok[1]) - pos(q.ok[0])}%"></span>` : ''}<input id="tempIn" type="range" min="${lo}" max="${hi}" step="1" value="${A ? A.v : Q.temp}" ${A ? 'disabled' : ''} aria-label="Temperatur"></div>
+        <div class="flex-sb small muted"><span>4 °C · eiskalt</span><span>22 °C · Zimmer</span></div></div>
+        ${A ? '' : '<button class="big" data-act="qtemp">Prüfen</button>'}`;
+    }
+    const fbTitle = A ? (A.ok ? ['Genau!', 'Richtig!', 'Sitzt.'][Q.i % 3] : q.t === 'pair' ? `Fast – ${A.miss} ${A.miss === 1 ? 'Fehlgriff' : 'Fehlgriffe'}` : q.t === 'temp' ? `Richtig wären ${(q.show || q.ok)[0]}–${(q.show || q.ok)[1]} °C` : 'Nicht ganz') : '';
+    return `<div class="screen stack quiz ${A ? 'answered' : ''}" style="gap:18px">
+      <div class="row" style="gap:14px"><button class="xbtn" data-act="qclose" aria-label="Schließen"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        <div class="segs">${segs}</div><span class="small muted" style="font-weight:600">${Q.i + 1} / ${n}</span></div>
+      <div class="kicker caps berry">${esc(Q.title)}</div>
+      ${w ? `<div class="row" style="gap:16px;align-items:center">${bigLabel(w, 92, 120)}<h2 class="qq">${esc(q.q)}</h2></div>` : `<h2 class="qq">${esc(q.q)}</h2>`}
+      ${body}
+      ${A ? `<div class="qfb ${A.ok ? 'ok' : 'no'}"><div class="flex-sb"><b>${esc(fbTitle)}</b>${Q.gained && A.ok && S.school.right[q.qid] ? '' : ''}</div><p>${esc(q.x || '')}</p>
+        <button class="big ${A.ok ? 'okbtn' : 'dark'}" data-act="qnext">${Q.i + 1 < n ? 'Weiter' : 'Auswertung'}</button></div>` : ''}
+    </div>`;
+  }
+
+  // Mini-Lektion nach einer Probe
+  function pickMini(t) {
+    const p = t.probes[t.probes.length - 1], w = wine(t.wineId);
+    const m = MINIS.find((x) => !S.school.right['m-' + x.id] && x.when(p.palate || {}, t.probes.length, w));
+    if (!m) return null;
+    return { id: m.id, tid: t.id, at: p.at, opts: shuffle(m.q.a), correct: m.q.a[0], ans: null };
+  }
+  function miniPick(k) {
+    const M = ui.mini; if (!M || M.ans !== null) return;
+    M.ans = k; const ok = M.opts[k] === M.correct;
+    if (ok && !S.school.right['m-' + M.id]) { S.school.right['m-' + M.id] = 1; M.gained = 10; save(); }
+    ui._keepScroll = true; render();
+  }
+  function vMini(tid) {
+    const M = ui.mini, t = tasting(tid); if (!M || !t) { ui.stack.pop(); return vTasting(tid); }
+    const m = MINIS.find((x) => x.id === M.id), w = wine(t.wineId), p = t.probes[t.probes.length - 1];
+    const v = m.dim && p.palate ? p.palate[m.dim] : null;
+    const ok = M.ans !== null && M.opts[M.ans] === M.correct;
+    return `<div class="screen stack mini" style="gap:16px">
+      <div class="savedbar"><span class="ok">${I.check}</span><div><b>Probe gespeichert</b><div class="small muted">${esc(w ? w.name + ' ' + w.vintage : '')} · ${esc(whenLabel(t, p.at))}</div></div></div>
+      <div class="kicker caps" style="color:#5E8A4C">Kurz gelernt · ${esc(m.kicker)}</div>
+      <h1 class="mt">${esc(m.title)}</h1>
+      ${v ? `<div class="card stack" style="gap:8px"><div class="flex-sb small"><span class="muted">Deine Angabe: ${esc((PAL.find((x) => x[0] === m.dim) || [])[1] || '')}</span><b style="color:var(--berry)">${esc(WORDS[m.dim][v - 1])}</b></div>
+        <div class="gauge"><i style="left:${((v - 1) / 4) * 100}%"></i></div><div class="flex-sb" style="font-size:11px;color:#9A8F96"><span>${esc(WORDS[m.dim][0])}</span><span>${esc(WORDS[m.dim][4])}</span></div></div>` : ''}
+      <p class="mtext">${esc(m.text)}</p>
+      <b style="font-size:16px">${esc(m.q.q)}</b>
+      <div class="opts">${M.opts.map((o, k) => { const cls = M.ans === null ? '' : o === M.correct ? 'right' : k === M.ans ? 'wrong' : 'dim'; return `<button class="opt sm ${cls}" data-act="mpick" data-i="${k}">${esc(o)}${M.ans !== null && o === M.correct ? I.check : ''}</button>`; }).join('')}</div>
+      ${M.ans !== null ? `<div class="small" style="color:${ok ? 'var(--ok)' : 'var(--dec)'};font-weight:600">${ok ? (M.gained ? 'Richtig · +10 Punkte für die Weinschule' : 'Richtig') : 'Nicht ganz – richtig ist markiert. Beim nächsten Mal wieder.'}</div>` : ''}
+      <div class="flex-sb" style="align-items:center;margin-top:4px"><span class="small muted">Zählt für die Weinschule</span><button class="btn ${M.ans !== null ? 'fill' : ''}" style="flex:0 0 auto;padding:0 22px" data-act="mdone">${M.ans !== null ? 'Fertig' : 'Später'}</button></div>
+    </div>`;
+  }
+
   // ---------- Render ----------
   function current() { return ui.stack[ui.stack.length - 1]; }
   function render() {
     const c = current();
     let body;
-    if (c) body = { wine: vWine, tasting: vTasting, probe: vProbe }[c.v](c.id);
+    if (c) body = { wine: vWine, tasting: vTasting, probe: vProbe, schule: vSchule, quiz: vQuiz, mini: vMini }[c.v](c.id);
     else body = { keller: vKeller, offen: vOffen, regionen: vRegionen, sommelier: vSommelier, profil: vProfil }[ui.tab]();
     let sheet = '';
     if (ui.sheet) sheet = ui.sheet.t === 'wine' ? sheetWine(ui.sheet.id) : ui.sheet.t === 'region' ? sheetRegion(ui.sheet.id) : ui.sheet.t === 'add' ? sheetAdd() : ui.sheet.t === 'export' ? sheetExport() : sheetImport();
     const keepScroll = ui._keepScroll; ui._keepScroll = false;
     const y = window.scrollY;
-    $app.innerHTML = body + (c && c.v === 'probe' ? '' : tabsHtml()) + sheet;
+    $app.innerHTML = body + (c && ['probe', 'quiz', 'mini'].includes(c.v) ? '' : tabsHtml()) + sheet;
     if (keepScroll) window.scrollTo(0, y); else if (!ui.sheet) window.scrollTo(0, ui._scrollTo || 0);
     ui._scrollTo = 0;
     const ci = document.getElementById('customIn'); if (ci) ci.focus();
@@ -501,6 +727,8 @@
     t.probes.push({ at: Date.now(), nose: d.nose.slice(), custom: d.custom.slice(), palate: { ...d.palate }, rating: d.rating, note: d.note });
     save(); ui.draft = null;
     ui.stack.pop(); if (!current() || current().v !== 'tasting') ui.stack.push({ v: 'tasting', id: t.id });
+    const m = pickMini(t);
+    if (m) { ui.mini = m; ui.stack.push({ v: 'mini', id: t.id }); render(); return; }
     render(); toast('Probe gespeichert');
   }
 
@@ -530,7 +758,7 @@
       case 'copyexp': { const ta = document.getElementById('exp'); try { navigator.clipboard.writeText(ta.value).then(() => toast('Kopiert'), () => { ta.select(); toast('Markiert – jetzt kopieren'); }); } catch (err) { ta.select(); } break; }
       case 'doimport': {
         const v = document.getElementById('imp').value;
-        try { const s = JSON.parse(v); if (!s.wines || !s.tastings) throw 0; S = s; save(); ui.sheet = null; ui.stack = []; render(); toast('Eingespielt'); } catch (err) { toast('Das sieht nicht nach einer Sicherung aus'); }
+        try { const s = JSON.parse(v); if (!s.wines || !s.tastings) throw 0; S = s; norm(); save(); ui.sheet = null; ui.stack = []; render(); toast('Eingespielt'); } catch (err) { toast('Das sieht nicht nach einer Sicherung aus'); }
         break;
       }
       case 'saveadd': {
@@ -554,6 +782,17 @@
         break;
       case 'reopen': tasting(id).done = false; save(); ui._keepScroll = true; render(); break;
       case 'learn': ui.learnOpen = ui.learnOpen === id ? null : id; ui._keepScroll = true; render(); break;
+      case 'schule': push('schule'); break;
+      case 'chap': ui.chOpen = ui.chOpen === id ? null : id; ui._keepScroll = true; render(); break;
+      case 'quiz': startQuiz(id); break;
+      case 'qpick': quizPick(parseInt(el.dataset.i, 10)); break;
+      case 'qpl': case 'qpr': quizPair(a === 'qpl' ? 'l' : 'r', parseInt(el.dataset.i, 10)); break;
+      case 'qtemp': quizTemp(); break;
+      case 'qnext': quizNext(); break;
+      case 'qagain': startQuiz(ui.quiz.id); break;
+      case 'qclose': ui.quiz = null; back(); break;
+      case 'mpick': miniPick(parseInt(el.dataset.i, 10)); break;
+      case 'mdone': ui.mini = null; back(); break;
     }
   });
   $app.addEventListener('input', (e) => {
@@ -561,6 +800,7 @@
     const k = e.target.dataset && e.target.dataset.pal;
     if (k && ui.draft) { ui.draft.palate[k] = parseInt(e.target.value, 10); const w = document.getElementById('w-' + k); if (w) w.textContent = WORDS[k][ui.draft.palate[k] - 1]; }
     if (e.target.id === 'note' && ui.draft) ui.draft.note = e.target.value;
+    if (e.target.id === 'tempIn' && ui.quiz) { ui.quiz.temp = parseInt(e.target.value, 10); const tv = document.getElementById('tempVal'); if (tv) tv.textContent = ui.quiz.temp + ' °C'; }
   });
   function commitCustom(inp) {
     const v = inp.value.trim(); ui.draft.adding = false;

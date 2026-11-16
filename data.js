@@ -174,5 +174,12 @@ const ASSETS = {
   splash: IMG('splash.jpg'),
   emptyGlass: IMG('emptyGlass.jpg'),
   emptyRack: IMG('emptyRack.jpg'),
-  sommelier: IMG('sommelier.jpg')
+  sommelier: IMG('sommelier.jpg'),
+  // Header-Aquarelle, wechseln automatisch mit der Jahreszeit
+  header: {
+    fruehling: IMG('header/fruehling.jpg'),
+    sommer: IMG('header/sommer.jpg'),
+    lese: IMG('header/lese.jpg'),
+    winter: IMG('header/winter.jpg')
+  }
 };
