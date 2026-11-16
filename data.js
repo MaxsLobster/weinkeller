@@ -1,0 +1,178 @@
+/* Weinkeller – Stammdaten
+   Quellen: Lobenberg-Produktseiten (gute-weine.de), Falstaff, Weingut Kranz, Händlerseiten.
+   "est: true" = Trinkfenster ist eine Schätzung (keine Lobenberg-Angabe gefunden).
+   Dekantieren/Temperatur/Passt zu = Empfehlung (Faustregeln), keine Händlerangabe. */
+
+const IMG = (p) => 'img/' + p; // lokale Bilder (Quelle: Higgsfield, Aquarell)
+const LB = (code) => `img/flaschen/${code}.png`; // Flaschenfotos (Quelle: Lobenberg / gute-weine.de)
+
+const AROMAS = [
+  { id: 'kirsche', label: 'Kirsche', cat: 'rot', img: IMG('aromen/kirsche.jpg') },
+  { id: 'himbeere', label: 'Himbeere', cat: 'rot', img: IMG('aromen/himbeere.jpg') },
+  { id: 'johannisbeere', label: 'Johannisbeere', cat: 'rot', img: IMG('aromen/johannisbeere.jpg') },
+  { id: 'brombeere', label: 'Brombeere', cat: 'dunkel', img: IMG('aromen/brombeere.jpg') },
+  { id: 'pflaume', label: 'Pflaume', cat: 'dunkel', img: IMG('aromen/pflaume.jpg') },
+  { id: 'zitrone', label: 'Zitrone', cat: 'zitrus', img: IMG('aromen/zitrone.jpg') },
+  { id: 'orange', label: 'Orange', cat: 'zitrus', img: IMG('aromen/orange.jpg') },
+  { id: 'apfel', label: 'Apfel', cat: 'obst', img: IMG('aromen/apfel.jpg') },
+  { id: 'birne', label: 'Birne / Quitte', cat: 'obst', img: IMG('aromen/birne.jpg') },
+  { id: 'pfirsich', label: 'Pfirsich', cat: 'obst', img: IMG('aromen/pfirsich.jpg') },
+  { id: 'veilchen', label: 'Veilchen', cat: 'blumig', img: IMG('aromen/veilchen.jpg') },
+  { id: 'rose', label: 'Rose / Blüten', cat: 'blumig', img: IMG('aromen/rose.jpg') },
+  { id: 'kraeuter', label: 'Kräuter', cat: 'kraeuter', img: IMG('aromen/kraeuter.jpg') },
+  { id: 'minze', label: 'Minze', cat: 'kraeuter', img: IMG('aromen/minze.jpg') },
+  { id: 'pfeffer', label: 'Pfeffer', cat: 'wuerze', img: IMG('aromen/pfeffer.jpg') },
+  { id: 'gewuerze', label: 'Gewürze', cat: 'wuerze', img: IMG('aromen/gewuerze.jpg') },
+  { id: 'waldboden', label: 'Waldboden', cat: 'erde', img: IMG('aromen/waldboden.jpg') },
+  { id: 'stein', label: 'Stein / Schiefer', cat: 'mineral', img: IMG('aromen/stein.jpg') },
+  { id: 'salz', label: 'Salz', cat: 'mineral', img: IMG('aromen/salz.jpg') },
+  { id: 'vanille', label: 'Vanille / Holz', cat: 'holz', img: IMG('aromen/vanille.jpg') },
+  { id: 'rauch', label: 'Rauch', cat: 'holz', img: IMG('aromen/rauch.jpg') },
+  { id: 'schokolade', label: 'Schokolade', cat: 'holz', img: IMG('aromen/schokolade.jpg') }
+];
+
+const AROMA_CATS = {
+  rot: 'rote Frucht', dunkel: 'dunkle Frucht', zitrus: 'Zitrus', obst: 'Obst', blumig: 'Blüten',
+  kraeuter: 'Kräuter', wuerze: 'Würze', erde: 'Erde', mineral: 'Mineral', holz: 'Holz & Röstung'
+};
+
+const REGIONS = {
+  'ribeira-sacra': { name: 'Ribeira Sacra', country: 'Spanien', area: 'Galicien', img: IMG('regionen/ribeira-sacra.jpg'), tint: '#E6EFE2',
+    text: 'Steile Terrassen an den Flüssen Sil, Miño und Bibei. Kühles, atlantisches Klima, Granit und Schiefer – Heimat der Mencía.' },
+  'bierzo': { name: 'Bierzo', country: 'Spanien', area: 'Kastilien-León', img: IMG('regionen/bierzo.jpg'), tint: '#F4EBD8',
+    text: 'Rund um das Dorf Valtuille auf über 500 m Höhe, mit Sand-, Schiefer- und Quarzitböden. Mencía und Godello – die Gegend von Raúl Pérez.' },
+  'pfalz': { name: 'Pfalz', country: 'Deutschland', area: 'Südpfalz', img: IMG('regionen/pfalz.jpg'), tint: '#EFE6F0',
+    text: 'Die Kleine Kalmit bei Ilbesheim ist ein rund 270 m hoher Kalkhügel am Rand des Pfälzerwalds – Kalk, Löss und Mergel.' },
+  'rheingau': { name: 'Rheingau', country: 'Deutschland', area: 'Hessen', img: IMG('regionen/rheingau.jpg'), tint: '#E3ECF2',
+    text: 'Hallgarten ist die höchstgelegene Weingemeinde des Rheingaus – kühl, mit Schiefer- und Phyllitböden. Riesling-Land.' },
+  'rioja': { name: 'Rioja Alavesa', country: 'Spanien', area: 'Baskenland', img: IMG('regionen/rioja.jpg'), tint: '#F5E6DA',
+    text: 'Hochlagen im baskischen Teil der Rioja. Böden aus Kalk, Sand, Gips und rotem Lehm – Tempranillo-Heimat.' },
+  'navarra': { name: 'Navarra', country: 'Spanien', area: 'Nordspanien', img: IMG('regionen/navarra.jpg'), tint: '#F3E5DE',
+    text: 'Nördlicher Nachbar der Rioja. Um San Martín de Unx stehen fast 100 Jahre alte Garnacha-Buschreben auf steinigem Lehm und Kalk.' },
+  'jerez': { name: 'Sanlúcar / Jerez', country: 'Spanien', area: 'Andalusien', img: IMG('regionen/jerez.jpg'), tint: '#F6F0E2',
+    text: 'Sanlúcar de Barrameda am Atlantik. Kreideweiße Albariza-Böden und Palomino – das Sherry-Land, hier als stiller Weißwein.' },
+  'teneriffa': { name: 'Teneriffa', country: 'Spanien', area: 'Kanaren', img: IMG('regionen/teneriffa.jpg'), tint: '#E0ECEF',
+    text: 'Valle de La Orotava im Norden der Insel. Vulkanböden, Atlantikklima und uralte einheimische Rebsorten wie Listán Negro.' },
+  'carnuntum': { name: 'Carnuntum', country: 'Österreich', area: 'Niederösterreich', img: IMG('regionen/carnuntum.jpg'), tint: '#F2E8DA',
+    text: 'Südlich der Donau, pannonisches Klima. Kalkhaltige Rieden um Prellenkirchen und Höflein – Blaufränkisch.' },
+  'chablis': { name: 'Chablis', country: 'Frankreich', area: 'Burgund', img: IMG('regionen/chablis.jpg'), tint: '#EDEFE4',
+    text: 'Nördlichstes Burgund. Kimmeridge-Kalk und kühles Klima ergeben straffen, salzig-mineralischen Chardonnay.' },
+  'corbieres': { name: 'Corbières', country: 'Frankreich', area: 'Languedoc', img: IMG('regionen/corbieres.jpg'), tint: '#F4E4DF',
+    text: 'Wilde, felsige Garrigue-Hügel nahe den Pyrenäen. In Fontjoncouse stehen über 100 Jahre alte Reben.' },
+  'mendoza': { name: 'Mendoza', country: 'Argentinien', area: 'Anden', img: IMG('regionen/mendoza.jpg'), tint: '#E6EAF3',
+    text: 'Weinberge bis über 1.200 m Höhe am Fuß der Anden, trocken und sonnig – Malbec-Heimat, aber auch alte Sorten wie Pedro Giménez.' },
+  'sonoma': { name: 'Sonoma', country: 'USA', area: 'Kalifornien', img: IMG('regionen/sonoma.jpg'), tint: '#F4EAD9',
+    text: 'Chalk Hill in Sonoma County: Reben auf tonhaltigem Lehm über verdichteter Vulkanasche.' }
+};
+
+/* critic.ids: Aromen-IDs oder "cat:<kategorie>" für den Vergleich; critic.words: so beschrieben (Kurzform) */
+const SEED_WINES = [
+  { id: 'kalmit-sb-22', name: 'Kalmit Spätburgunder GG', producer: 'Weingut Kranz', vintage: 2022, color: 'rot', region: 'pfalz',
+    grapes: 'Spätburgunder', from: 2026, to: 2036, est: true, decant: 60, temp: '15–16', glass: 'Burgunder',
+    pairing: ['Ente', 'Wild', 'Pilzgerichte'], style: [], points: 'Falstaff 93+',
+    critic: { src: 'Weingut / Falstaff', words: ['Kirsche', 'Johannisbeere', 'Himbeere', 'Waldboden', 'Rauch', 'Wacholder', 'Pfeffer', 'Rosmarin', 'Bitterschokolade'], ids: ['kirsche', 'johannisbeere', 'himbeere', 'waldboden', 'rauch', 'pfeffer', 'kraeuter', 'schokolade'] },
+    price: 43.0, code: '85508Hfl_o', sku: '85508H', bottles: 1 },
+  { id: 'godello-24', name: 'El Castro de Valtuille Godello', producer: 'Castro Ventosa', vintage: 2024, color: 'weiss', region: 'bierzo',
+    grapes: 'Godello', from: 2026, to: 2038, decant: 0, temp: '10–12', glass: 'Weißwein, bauchig',
+    pairing: ['Fisch vom Grill', 'Meeresfrüchte', 'Huhn'], style: ['mineralisch', 'unkonventionell', 'voll & rund'], points: 'Lobenberg 94–95',
+    critic: { src: 'Lobenberg / Parker / Suckling', words: ['Zitrone', 'salziger Abgang', 'steinig'], ids: ['zitrone', 'salz', 'stein'] },
+    price: 17.91, code: '52307Hfl_o', sku: '82621H', bottles: 1 },
+  { id: 'trinite-cab-19', name: 'Cabernet Sauvignon', producer: 'Trinité Estate', vintage: 2019, color: 'rot', region: 'sonoma', labelPos: '50% 70%',
+    grapes: 'Cabernet Sauvignon', from: 2024, to: 2034, est: true, decant: 60, temp: '17–18', glass: 'Bordeaux',
+    pairing: ['Steak vom Grill', 'Lamm', 'Hartkäse'], style: [], points: '',
+    critic: { src: 'Weingut (Vorjahrgang)', words: ['Brombeere', 'dunkle Kirsche', 'Minze', 'Kakao'], ids: ['brombeere', 'kirsche', 'minze', 'schokolade'] },
+    price: 35.91, code: '80886Hf', sku: '80886H', bottles: 1 },
+  { id: 'chablis-24', name: 'Chablis Village', producer: 'Maison de la Chapelle', vintage: 2024, color: 'weiss', region: 'chablis',
+    grapes: 'Chardonnay', from: 2026, to: 2036, decant: 0, temp: '9–11', glass: 'Weißwein',
+    pairing: ['Austern', 'Fisch', 'Ziegenkäse'], style: ['frische Säure', 'mineralisch', 'leicht & frisch'], points: 'Lobenberg 93–94',
+    critic: { src: 'Lobenberg', words: ['kühl', 'straff', 'mineralisch'], ids: ['stein'] },
+    price: 24.75, code: '58907Hfl_o', sku: '80287H', bottles: 1 },
+  { id: 'deux-cles-rose-25', name: 'Clés en Main Rosé', producer: 'Domaine des Deux Clés', vintage: 2025, color: 'rose', region: 'corbieres',
+    grapes: 'Carignan, Mourvèdre, Syrah', from: 2026, to: 2031, est: true, decant: 0, temp: '10–12', glass: 'Weißwein',
+    pairing: ['Grillgemüse', 'Paella', 'Mediterrane Küche'], style: ['leicht & frisch', 'strukturiert', 'Speisenbegleiter'], points: '',
+    critic: { src: 'Lobenberg (Vorjahrgang)', words: ['dunkle Steinigkeit', 'zarte Cremigkeit'], ids: ['stein'] },
+    price: 14.31, code: '65987Hfl_o', sku: '78659H', bottles: 1 },
+  { id: 'kuehn-alte-reben-24', name: 'Riesling Hallgarten Alte Reben', producer: 'Peter Jakob Kühn', vintage: 2024, color: 'weiss', region: 'rheingau',
+    grapes: 'Riesling', from: 2026, to: 2033, decant: 15, temp: '9–11', glass: 'Riesling',
+    pairing: ['Asiatisch', 'Forelle', 'Spargel'], style: ['frische Säure', 'fruchtbetont', 'mineralisch'], points: 'Lobenberg 94–95+',
+    critic: { src: 'Parker', words: ['gelbe Frucht', 'Steinsalz', 'mineralische Würze', 'Hefe'], ids: ['salz', 'gewuerze', 'cat:obst'] },
+    price: 19.5, code: '41617Hfl_o', sku: '78152H', bottles: 1 },
+  { id: 'muhr-kirchweingarten-22', name: 'Ried Kirchweingarten Erste Lage', producer: 'Dorli Muhr', vintage: 2022, color: 'rot', region: 'carnuntum',
+    grapes: 'Blaufränkisch', from: 2026, to: 2037, decant: 45, temp: '16', glass: 'Burgunder',
+    pairing: ['Rinderbraten', 'Wild', 'Gans'], style: ['seidig & aromatisch', 'frische Säure', 'pikant & würzig'], points: 'Lobenberg 94–95',
+    critic: { src: 'Parker', words: ['rote Frucht', 'Blüten', 'Schwarztee'], ids: ['cat:rot', 'cat:blumig'] },
+    price: 39.6, code: '75881Hfl', sku: '75881H', bottles: 1 },
+  { id: 'naranjo-24', name: 'Tesoro Naranjo de Pedro Giménez', producer: 'Finca Feliz', vintage: 2024, color: 'weiss', region: 'mendoza',
+    grapes: 'Pedro Giménez (Orange Wine)', from: 2025, to: 2029, est: true, decant: 0, temp: '12–13', glass: 'Weißwein, bauchig',
+    pairing: ['Curry', 'Gegrilltes Gemüse', 'Würziger Käse'], style: [], points: '',
+    critic: { src: 'Händler (Vorjahrgang)', words: ['Blüten', 'Orangenblüte', 'getrocknete Zitrus'], ids: ['cat:blumig', 'orange', 'zitrone'] },
+    price: 14.85, code: '67972Hfl_o', sku: '74903H', bottles: 1 },
+  { id: 'marquez-valtuille-23', name: 'Valtuille Vino de Villa', producer: 'César Márquez', vintage: 2023, color: 'rot', region: 'bierzo',
+    grapes: 'Mencía 85 %, Alicante Bouschet', from: 2026, to: 2042, decant: 45, temp: '15–16', glass: 'Burgunder',
+    pairing: ['Lamm', 'Chorizo', 'Pilze'], style: ['fruchtbetont', 'seidig & aromatisch'], points: 'Lobenberg 94–95',
+    critic: { src: 'Lobenberg', words: ['Walderdbeere', 'Himbeere', 'Cassis', 'Brombeere', 'Holunder'], ids: ['himbeere', 'brombeere', 'cat:rot'] },
+    price: 19.98, code: '59051Hfl_o', sku: '72227H', bottles: 1 },
+  { id: 'patinegro-22', name: 'Patinegro Palomino Fino', producer: 'Barbadillo', vintage: 2022, color: 'weiss', region: 'jerez',
+    grapes: 'Palomino Fino', from: 2025, to: 2034, est: true, decant: 30, temp: '11–12', glass: 'Weißwein',
+    pairing: ['Jamón', 'Mandeln', 'Fisch'], style: ['mineralisch', 'frische Säure', 'fruchtbetont'], points: '',
+    critic: { src: 'Lobenberg (Vorjahrgang)', words: ['Salz', 'Quitte', 'Birne', 'Blüten'], ids: ['salz', 'birne', 'cat:blumig'] },
+    price: 15.93, code: '69748Hfl_o', sku: '69748H', bottles: 1 },
+  { id: 'lalama-21', name: 'Lalama', producer: 'Dominio do Bibei', vintage: 2021, color: 'rot', region: 'ribeira-sacra',
+    grapes: 'Mencía 85 %, Brancellao, Mouratón, Sousón', from: 2026, to: 2039, decant: 60, temp: '15–16', glass: 'Burgunder',
+    pairing: ['Lamm vom Grill', 'Pilzrisotto', 'Gereifter Hartkäse'], style: ['pikant & würzig', 'saftig', 'seidig & aromatisch'], points: 'Lobenberg 95',
+    critic: { src: 'Vinous', words: ['Veilchen', 'getrocknete Blumen', 'Pflaume', 'rote Frucht', 'Balsamico'], ids: ['veilchen', 'pflaume', 'cat:rot', 'cat:blumig'] },
+    price: 21.96, code: '34438Hfl_o', sku: '68343H', bottles: 1 },
+  { id: 'miperal-22', name: 'Miperal Malbec', producer: 'Vaglio', vintage: 2022, color: 'rot', region: 'mendoza', labelPos: '50% 66%',
+    grapes: 'Malbec', from: 2025, to: 2045, decant: 90, temp: '17–18', glass: 'Bordeaux',
+    pairing: ['Asado / Rind', 'Lamm', 'Wild'], style: ['voluminös & kräftig', 'strukturiert', 'pikant & würzig'], points: 'Lobenberg 97–98+',
+    critic: { src: 'Lobenberg / Suckling', words: ['Brombeere', 'Amarenakirsche', 'Pfeffer', 'Schokolade', 'Kräuter', 'erdig'], ids: ['brombeere', 'kirsche', 'pfeffer', 'schokolade', 'kraeuter', 'waldboden'] },
+    price: 29.7, code: '35309Hfl_o', sku: '67779H', bottles: 1 },
+  { id: 'la-dama-19', name: 'La Dama Garnacha', producer: 'Domaines Lupier – Raúl Pérez', vintage: 2019, color: 'rot', region: 'navarra',
+    grapes: 'Garnacha', from: 2025, to: 2048, decant: 60, temp: '16–17', glass: 'Burgunder',
+    pairing: ['Lamm', 'Schmorgerichte', 'Iberico'], style: ['strukturiert', 'tanninreich', 'pikant & würzig'], points: 'Lobenberg 97',
+    critic: { src: 'Lobenberg', words: ['delikat', 'zart', 'pikant'], ids: [] },
+    price: 31.2, code: '66088Hfl_o', sku: '66088H', bottles: 1 },
+  { id: 'lindes-salinillas-21', name: 'Lindes de Remelluri Salinillas', producer: 'Remelluri – Telmo Rodríguez', vintage: 2021, color: 'rot', region: 'rioja',
+    grapes: 'Tempranillo 91 %, Garnacha', from: 2026, to: 2044, decant: 60, temp: '16–17', glass: 'Bordeaux',
+    pairing: ['Lammkoteletts', 'Rind', 'Manchego'], style: ['fruchtbetont', 'tanninreich', 'voluminös & kräftig'], points: 'Lobenberg 96–97',
+    critic: { src: 'Kritikernotiz', words: ['Vanille', 'Thymian', 'Lebkuchen', 'Brombeere', 'rote Beeren'], ids: ['vanille', 'kraeuter', 'gewuerze', 'brombeere', 'cat:rot'] },
+    price: 20.7, code: '58227Hfl_o', sku: '65211H', bottles: 1 },
+  { id: 'dolio-19', name: 'Dolio', producer: 'Adega Algueira', vintage: 2019, color: 'rot', region: 'ribeira-sacra',
+    grapes: 'Mencía 66 %, Brancellao 20 %, Sousón', from: 2025, to: 2045, decant: 60, temp: '15–16', glass: 'Burgunder',
+    pairing: ['Taube / Geflügel', 'Pilze', 'Gereifter Käse'], style: ['saftig', 'strukturiert'], points: 'Lobenberg 97–100',
+    critic: { src: 'Lobenberg', words: ['seidige Tannine', 'rauchig'], ids: ['rauch'] },
+    price: 55.92, code: '62283Hfl_o', sku: '62283H', bottles: 1 },
+  { id: 'vaglio-blanco-22', name: 'Vaglio Blanco', producer: 'Vaglio', vintage: 2022, color: 'weiss', region: 'mendoza',
+    grapes: 'Chardonnay 90 %, Sémillon', from: 2024, to: 2032, decant: 0, temp: '11–12', glass: 'Burgunder (weiß)',
+    pairing: ['Hähnchen', 'Kalb', 'Gegrillter Fisch'], style: ['mineralisch', 'voll & rund', 'fruchtbetont'], points: 'Lobenberg 94',
+    critic: { src: 'Lobenberg', words: ['Butterblume', 'weich', 'einladend'], ids: ['cat:blumig'] },
+    price: 19.8, code: '43101Hfl_o', sku: '61282H', bottles: 1 },
+  { id: 'anza-parcelas-21', name: 'Selección de Parcelas', producer: 'Dominio de Anza', vintage: 2021, color: 'rot', region: 'bierzo',
+    grapes: 'Alicante Bouschet, Mencía, Sousón', from: 2025, to: 2043, decant: 45, temp: '15–16', glass: 'Burgunder',
+    pairing: ['Lamm', 'Wild', 'Pilze'], style: ['fruchtbetont', 'pikant & würzig', 'saftig'], points: 'Lobenberg 96–97',
+    critic: { src: 'Parker', words: ['blumig', 'klar', 'fein'], ids: ['cat:blumig'] },
+    price: 22.46, code: '43768Hfl_o', sku: '57487H', bottles: 1 },
+  { id: 'el-lance-20', name: '7 Fuentes El Lance', producer: 'Suertes del Marqués', vintage: 2020, color: 'rot', region: 'teneriffa',
+    grapes: 'Listán Negro, Castellana Negra, Vijariego Negro', from: 2023, to: 2031, decant: 20, temp: '14–15', glass: 'Burgunder',
+    pairing: ['Thunfisch', 'Tapas', 'Gegrilltes Huhn'], style: ['saftig', 'seidig & aromatisch', 'strukturiert'], points: 'Lobenberg 94+',
+    critic: { src: 'Lobenberg / Parker', words: ['Vulkangestein', 'steinig', 'elegant'], ids: ['stein'] },
+    price: 13.95, code: '49319Hfl_o', sku: '52436H', bottles: 1 }
+];
+
+for (const w of SEED_WINES) { w.img = LB(w.code); w.url = 'https://www.gute-weine.de/' + w.sku; }
+
+const LEARN = [
+  { id: 'saeure', title: 'Säure', text: 'Lässt dir das Wasser im Mund zusammenlaufen. Viel Säure wirkt frisch und lebendig (Riesling, Chablis), wenig Säure weich und rund.' },
+  { id: 'tannin', title: 'Tannin', text: 'Gerbstoff aus Schalen, Kernen und Holz. Fühlt sich trocken und pelzig an Zahnfleisch und Zunge an – wie starker Schwarztee. Samtig = feines Tannin, griffig = kräftiges.' },
+  { id: 'koerper', title: 'Körper', text: 'Wie schwer der Wein im Mund liegt. Leicht wie Magermilch, voll wie Sahne. Hängt v. a. an Alkohol und Extrakt.' },
+  { id: 'abgang', title: 'Abgang', text: 'Wie lange der Geschmack nach dem Schlucken bleibt. Zähl die Sekunden: unter 5 kurz, über 15 lang.' },
+  { id: 'luft', title: 'Warum der Wein sich verändert', text: 'Mit Luft verfliegen verschlossene oder reduktive Töne, Frucht und Blüten kommen nach vorn, Tannine werden weicher. Junge, kräftige Rote profitieren am meisten.' }
+];
+
+const ASSETS = {
+  icon: IMG('icon.png'),
+  splash: IMG('splash.jpg'),
+  emptyGlass: IMG('emptyGlass.jpg'),
+  emptyRack: IMG('emptyRack.jpg'),
+  sommelier: IMG('sommelier.jpg')
+};
