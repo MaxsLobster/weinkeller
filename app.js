@@ -73,9 +73,16 @@
     if (d.toDateString() === y.toDateString()) return `gestern ${hm}`;
     return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }) + ' ' + hm;
   };
-  function toast(msg) {
-    const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
-    document.body.appendChild(el); setTimeout(() => el.remove(), 2200);
+  // toast('Text') oder toast('Text', { label: 'Rückgängig', fn: () => …, ms: 10000 })
+  function toast(msg, action) {
+    document.querySelectorAll('.toast.act').forEach((x) => x.remove());
+    const el = document.createElement('div'); el.className = 'toast' + (action ? ' act' : ''); el.textContent = msg;
+    if (action) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = action.label;
+      b.addEventListener('click', () => { el.remove(); action.fn(); });
+      el.appendChild(b);
+    }
+    document.body.appendChild(el); setTimeout(() => el.remove(), action ? action.ms || 10000 : 2200);
   }
 
   // ---------- Icons ----------
@@ -328,6 +335,7 @@
         ${w ? `<button class="link" data-act="wine" data-id="${w.id}">Weinkarte</button>` : ''}
         ${t.done ? `<button class="link" data-act="reopen" data-id="${t.id}">Doch noch offen</button>` : `<button class="link" data-act="empty" data-id="${t.id}">${ui.confirmEmpty === t.id ? 'Wirklich leer? Nochmal tippen' : 'Flasche leer'}</button>`}
       </div>
+      ${!t.done && !t.probes.length ? `<div class="row" style="justify-content:center"><button class="link subtle" data-act="undoopen" data-id="${t.id}">Doch nicht geöffnet</button></div>` : ''}
       ${ui.showCmp[t.id] && w ? compareCard(t, w) : ''}
     </div>`;
   }
@@ -720,9 +728,21 @@
     const t = { id: uid(), wineId: wid, openedAt: Date.now(), probes: [], done: false };
     S.tastings.push(t); save();
     ui.stack = [{ v: 'tasting', id: t.id }, { v: 'probe', id: t.id }]; ui.tab = 'offen'; ui.draft = null; ui.sheet = null; render();
+    toast(`${w.name} geöffnet`, { label: 'Rückgängig', fn: () => undoOpen(t.id), ms: 10000 });
+  }
+  // Versehentlich geöffnet: nur solange noch keine Probe gespeichert ist
+  function undoOpen(tid) {
+    const t = tasting(tid); if (!t || t.done || t.probes.length) return;
+    const w = wine(t.wineId);
+    S.tastings = S.tastings.filter((x) => x.id !== tid);
+    if (w) w.bottles = (w.bottles || 0) + 1;
+    save();
+    ui.stack = []; ui.tab = 'keller'; ui.draft = null; ui.sheet = null; ui.confirmEmpty = null; render();
+    toast('Zurück in den Keller gelegt');
   }
   function saveProbe() {
     const d = ui.draft, t = d && tasting(d.tid); if (!t) return;
+    document.querySelectorAll('.toast.act').forEach((x) => x.remove()); // „Rückgängig“ gilt nur ohne Probe
     const noteEl = document.getElementById('note'); if (noteEl) d.note = noteEl.value.trim();
     t.probes.push({ at: Date.now(), nose: d.nose.slice(), custom: d.custom.slice(), palate: { ...d.palate }, rating: d.rating, note: d.note });
     save(); ui.draft = null;
@@ -750,6 +770,7 @@
       case 'tasting': push('tasting', id); break;
       case 'probe': push('probe', id); break;
       case 'open': openBottle(id); break;
+      case 'undoopen': undoOpen(id); break;
       case 'region': ui.sheet = { t: 'region', id }; ui._keepScroll = true; render(); break;
       case 'closesheet': ui.sheet = null; ui._keepScroll = true; render(); break;
       case 'add': ui.sheet = { t: 'add' }; ui._keepScroll = true; render(); break;
