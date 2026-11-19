@@ -1,5 +1,5 @@
 /* Einfacher Offline-Cache: App-Dateien zuerst aus dem Netz, sonst aus dem Cache; Bilder cache-first. */
-const CACHE = 'weinkeller-v5';
+const CACHE = 'weinkeller-v6';
 const CORE = ['./', 'index.html', 'app.css', 'app.js', 'data.js', 'schule-data.js', 'manifest.json', 'icon-192.png', 'icon-512.png', 'img/header/fruehling.jpg', 'img/header/sommer.jpg', 'img/header/lese.jpg', 'img/header/winter.jpg'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)).then(() => self.skipWaiting())); });

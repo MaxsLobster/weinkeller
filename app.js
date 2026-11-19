@@ -623,7 +623,7 @@
         ${w ? `<button class="link" data-act="wine" data-id="${w.id}">Weinkarte</button>` : ''}
         ${t.done ? `<button class="link" data-act="reopen" data-id="${t.id}">Doch noch offen</button>` : `<button class="link" data-act="empty" data-id="${t.id}">${ui.confirmEmpty === t.id ? 'Wirklich leer? Nochmal tippen' : 'Flasche leer'}</button>`}
       </div>
-      ${!t.done && !t.probes.length ? `<div class="row" style="justify-content:center"><button class="link subtle" data-act="undoopen" data-id="${t.id}">Doch nicht geöffnet</button></div>` : ''}
+      ${!t.done ? `<div class="row" style="justify-content:center"><button class="link subtle" data-act="undoopen" data-id="${t.id}">${!t.probes.length ? 'Doch nicht geöffnet' : ui.confirmUndo === t.id ? `${t.probes.length === 1 ? 'Die Probe wird' : 'Die Proben werden'} gelöscht – nochmal tippen` : 'Zurück in den Keller legen'}</button></div>` : ''}
       ${ui.showCmp[t.id] && w ? compareCard(t, w) : ''}
     </div>`;
   }
@@ -1060,8 +1060,9 @@
     toast(`${w.name} geöffnet`, { label: 'Rückgängig', fn: () => undoOpen(t.id), ms: 10000 });
   }
   // Versehentlich geöffnet: nur solange noch keine Probe gespeichert ist
-  function undoOpen(tid) {
-    const t = tasting(tid); if (!t || t.done || t.probes.length) return;
+  // Zurück in den Keller: ohne Probe sofort, mit Proben nur bestätigt (force) – die Proben werden gelöscht
+  function undoOpen(tid, force) {
+    const t = tasting(tid); if (!t || t.done || (t.probes.length && !force)) return;
     const w = wine(t.wineId);
     S.tastings = S.tastings.filter((x) => x.id !== tid);
     if (w) w.bottles = (w.bottles || 0) + 1;
@@ -1101,7 +1102,11 @@
       case 'tasting': push('tasting', id); break;
       case 'probe': push('probe', id); break;
       case 'open': openBottle(id); break;
-      case 'undoopen': undoOpen(id); break;
+      case 'undoopen': {
+        const t = tasting(id);
+        if (t && t.probes.length && ui.confirmUndo !== id) { ui.confirmUndo = id; ui._keepScroll = true; render(); setTimeout(() => { if (ui.confirmUndo === id) { ui.confirmUndo = null; if (current() && current().id === id) { ui._keepScroll = true; render(); } } }, 5000); break; }
+        ui.confirmUndo = null; undoOpen(id, true); break;
+      }
       // Sommelier
       case 'chatnew': chat.msgs = []; chat.error = ''; chat.draft = ''; ui.sommelierWine = null; saveChat(); render(); break;
       case 'chatunfocus': ui.sommelierWine = null; render(); break;
