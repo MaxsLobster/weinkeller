@@ -1,2 +1,5 @@
 .DS_Store
 .claude/
+.secrets/
+supabase/.temp/
+supabase/.branches/

@@ -4,7 +4,9 @@
    Dekantieren/Temperatur/Passt zu = Empfehlung (Faustregeln), keine Händlerangabe. */
 
 const IMG = (p) => 'img/' + p; // lokale Bilder (Quelle: Higgsfield, Aquarell)
-const LB = (code) => `img/flaschen/${code}.png`; // Flaschenfotos (Quelle: Lobenberg / gute-weine.de)
+const LB = (code) => `img/flaschen/${code}.png`; // Flaschenfotos (Quelle: Lobenberg / gute-weine.de), lokal
+// Für neu bestellte Weine (noch nicht lokal): Foto direkt von Lobenberg; fehlt es, zeigt die App ein gezeichnetes Etikett
+const LB_WEB = (code) => `https://res.cloudinary.com/guteweine/image/upload/c_pad,w_300,h_400,b_white,dpr_2.0/products/${code}.png`;
 
 const AROMAS = [
   { id: 'kirsche', label: 'Kirsche', cat: 'rot', img: IMG('aromen/kirsche.jpg') },

@@ -16,18 +16,65 @@
     try {
       const raw = localStorage.getItem(KEY);
       if (!raw) return seed();
-      const s = JSON.parse(raw);
-      // neue Stammdaten-Felder (Bilder, Texte) aus SEED nachziehen, Bestand + eigene Weine behalten
-      const byId = Object.fromEntries(SEED_WINES.map((w) => [w.id, w]));
-      s.wines = s.wines.map((w) => (byId[w.id] ? { ...byId[w.id], bottles: w.bottles, addedAt: w.addedAt } : w));
-      return s;
+      return mergeSeed(JSON.parse(raw));
     } catch (e) { return seed(); }
+  }
+  // neue Stammdaten-Felder (Bilder, Texte) aus SEED nachziehen, Bestand + eigene Weine behalten
+  function mergeSeed(s) {
+    const byId = Object.fromEntries(SEED_WINES.map((w) => [w.id, w]));
+    s.wines = s.wines.map((w) => (byId[w.id] ? { ...byId[w.id], bottles: w.bottles, addedAt: w.addedAt } : w));
+    return s;
   }
   let S = load();
   const norm = () => { S.school = S.school || {}; S.school.right = S.school.right || {}; S.school.lessons = S.school.lessons || {}; };
   norm();
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* Speicher nicht verfügbar */ } }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* Speicher nicht verfügbar */ } scheduleBackup(); }
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
+
+  // ---------- Server: Supabase Edge Function „claude“ (Claude + Sicherung) ----------
+  const API_LIVE = 'https://eanzacjeqzskinjfpsss.supabase.co/functions/v1/claude';
+  // Nur zum lokalen Testen: ?api=http://localhost:… (gilt ausschließlich auf localhost)
+  const API = (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) && /^http:\/\/(localhost|127\.0\.0\.1):\d+\/?$/.test(new URLSearchParams(location.search).get('api') || '')) ? new URLSearchParams(location.search).get('api') : API_LIVE;
+  const LS = { code: 'weinkeller.code', chat: 'weinkeller.chat', sync: 'weinkeller.sync' };
+  const lsGet = (k) => { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } };
+  const lsSet = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) { /* egal */ } };
+  const getCode = () => lsGet(LS.code);
+  class ApiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
+  async function api(action, payload = {}, opts = {}) {
+    const code = opts.code || getCode();
+    if (!code) throw new ApiError('Zugangscode fehlt – einmal beim Sommelier eingeben.', 401);
+    let res;
+    try {
+      res = await fetch(API, { method: 'POST', headers: { 'content-type': 'application/json', 'x-wk-code': code }, body: JSON.stringify({ action, ...payload }) });
+    } catch (e) { throw new ApiError('Keine Verbindung – bist du online?', 0); }
+    if (opts.raw && res.ok) return res;
+    let data = {}; try { data = await res.json(); } catch (e) { /* keine JSON-Antwort */ }
+    if (!res.ok) throw new ApiError(data.error || `Fehler ${res.status}`, res.status);
+    return data;
+  }
+  // Automatische Sicherung, 5 s nach der letzten Änderung. Ein Gerät, das noch nie gesichert oder
+  // wiederhergestellt hat, überschreibt eine vorhandene Server-Sicherung nie von selbst.
+  const sync = { at: lsGet(LS.sync), busy: false, serverNewer: false, err: '' };
+  let backupTimer = null;
+  function scheduleBackup() { if (!getCode()) return; clearTimeout(backupTimer); backupTimer = setTimeout(() => doBackup(false), 5000); }
+  async function doBackup(force) {
+    if (!getCode() || sync.busy) return;
+    sync.busy = true;
+    try {
+      if (!sync.at && !force) {
+        try { await api('restore'); sync.serverNewer = true; return; } catch (e) { if (e.status !== 404) throw e; }
+      }
+      const r = await api('backup', { state: S });
+      sync.at = r.at; lsSet(LS.sync, r.at); sync.err = ''; sync.serverNewer = false;
+    } catch (e) { sync.err = e.message; } finally { sync.busy = false; }
+  }
+  async function restoreFromServer() {
+    const r = await api('restore');
+    if (!r.state || !Array.isArray(r.state.wines) || !Array.isArray(r.state.tastings)) throw new ApiError('Die Server-Sicherung ist leer.', 0);
+    S = mergeSeed(r.state); norm();
+    try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* Speicher nicht verfügbar */ }
+    sync.at = r.updated_at || new Date().toISOString(); lsSet(LS.sync, sync.at); sync.serverNewer = false; sync.err = '';
+  }
 
   // ---------- UI-Zustand ----------
   const ui = { tab: 'keller', stack: [], filter: 'alle', searchOpen: false, sommelierWine: null, q: '', expanded: null, draft: null, showCmp: {}, confirmEmpty: null, showEmpty: false, learnOpen: null, sheet: null, quiz: null, mini: null, chOpen: null };
@@ -40,6 +87,13 @@
   const uid = () => Math.random().toString(36).slice(2, 10);
   const COLOR = { rot: { label: 'Rot', dot: '#B4233C', lab: '#5E1420' }, weiss: { label: 'Weiß', dot: '#E9B949', lab: '#8C7A3A' }, rose: { label: 'Rosé', dot: '#E39A9A', lab: '#B5646A' } };
   const openTastingOf = (wid) => S.tastings.find((t) => t.wineId === wid && !t.done);
+  // Region: bekannte (mit Aquarell) oder neue aus einem Wein (schlichte Postkarte ohne Aquarell)
+  function REG(id) {
+    if (!id) return null;
+    if (REGIONS[id]) return REGIONS[id];
+    const w = S.wines.find((x) => x.region === id && x.regionName);
+    return w ? { name: w.regionName, country: w.country || '', area: w.country || '', text: 'Für diese Region gibt es noch kein Aquarell – die Postkarte kommt später.', tint: '#EFE8E2', img: null, custom: true } : null;
+  }
 
   function status(w) {
     const y = NOW_YEAR();
@@ -96,7 +150,11 @@
     region: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 15l5-4 4 3 3-2 4 3"/></svg>',
     wall: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="3.5" width="7" height="8" rx="1.5"/><rect x="13" y="3.5" width="7" height="8" rx="1.5"/><rect x="4" y="13.5" width="7" height="8" rx="1.5"/><rect x="13" y="13.5" width="7" height="8" rx="1.5"/></svg>',
     chat: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5h16v11H10l-5 4v-4H4z"/></svg>',
-    profil: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><polygon points="12,3 20,8 20,16 12,21 4,16 4,8"/><polygon points="12,8 16,10.5 15,15 9,15 8,10.5"/></svg>'
+    profil: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><polygon points="12,3 20,8 20,16 12,21 4,16 4,8"/><polygon points="12,8 16,10.5 15,15 9,15 8,10.5"/></svg>',
+    send: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6,11 12,5 18,11"/></svg>',
+    camera: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l1.6-2.4h6.8L17 8h3v11H4z"/><circle cx="12" cy="13.3" r="3.6"/></svg>',
+    doc: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h8.5L18.5 7.5V20.5H6z"/><path d="M14.5 3.5v4h4"/><path d="M9 12h6.5M9 15.5h6.5"/></svg>',
+    pen: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 19.5l1-4.5L15.8 4.7a1.8 1.8 0 0 1 2.5 0l1 1a1.8 1.8 0 0 1 0 2.5L9 18.5z"/><path d="M13.8 6.7l3.5 3.5"/></svg>'
   };
 
   // ---------- Bausteine ----------
@@ -108,7 +166,7 @@
     </div>`;
   }
   function regionImg(rid, extra = '') {
-    const r = REGIONS[rid];
+    const r = REG(rid);
     if (!r) return `<div style="position:absolute;inset:0;background:#EDE6E0"></div>`;
     return `<div style="position:absolute;inset:0;background:${r.tint}">
       <svg width="100%" height="100%" viewBox="0 0 330 120" preserveAspectRatio="none" aria-hidden="true"><path d="M0 60 Q70 30 150 55 T330 50 V120 H0z" fill="#9DBF8F"/><path d="M0 86 Q90 66 190 84 T330 80 V120 H0z" fill="#6E9A6A"/></svg></div>
@@ -153,12 +211,12 @@
   function typoLabel(w, k) { // k = Skalierung (1 = Kachel ~160px breit)
     const st = labelStyle(w), n = w.name || '';
     const fs = (n.length <= 7 ? 32 : n.length <= 11 ? 26 : n.length <= 18 ? 21 : 17) * k;
-    const r = REGIONS[w.region];
+    const r = REG(w.region);
     return `<div class="tlab" style="background:${st.bg};color:${st.fg};padding:${9 * k}px"><div class="tin" style="border-color:${st.line};gap:${7 * k}px;padding:${8 * k}px">
       <small style="font-size:${9 * k}px">${esc(w.producer || '')}</small><b style="font-family:${st.font};font-size:${fs}px">${esc(n)}</b><small style="font-size:${10 * k}px;letter-spacing:1px">${esc(r ? r.name : (w.grapes || ''))}</small></div></div>`;
   }
   function bigLabel(w, wpx, hpx) {
-    return `<div class="biglabel" style="width:${wpx}px;height:${hpx}px">${typoLabel(w, wpx / 160)}${imgTag(w.img, w.labelPos ? `style="object-position:${esc(w.labelPos)};transform-origin:${esc(w.labelPos)}"` : '')}</div>`;
+    return `<div class="biglabel" style="width:${wpx}px;height:${hpx}px">${typoLabel(w, wpx / 160)}${imgTag(w.img, w.photo ? 'style="object-position:50% 50%;transform:none"' : w.labelPos ? `style="object-position:${esc(w.labelPos)};transform-origin:${esc(w.labelPos)}"` : '')}</div>`;
   }
 
   // ---------- Keller (Etiketten-Wand) ----------
@@ -182,7 +240,7 @@
     let ws = S.wines.filter((w) => w.bottles > 0 || openTastingOf(w.id));
     if (ui.filter === 'rot') ws = ws.filter((w) => w.color === 'rot');
     else if (ui.filter === 'weiss') ws = ws.filter((w) => w.color !== 'rot');
-    if (q) ws = ws.filter((w) => [w.name, w.producer, w.grapes, (REGIONS[w.region] || {}).name, String(w.vintage)].join(' ').toLowerCase().includes(q));
+    if (q) ws = ws.filter((w) => [w.name, w.producer, w.grapes, (REG(w.region) || {}).name, String(w.vintage)].join(' ').toLowerCase().includes(q));
     const order = { open: 0, ok: 1, late: 2, wait: 3, leer: 4 };
     ws.sort((a, b) => order[status(a).k] - order[status(b).k] || (a.color === b.color ? 0 : a.color === 'rot' ? -1 : 1) || a.name.localeCompare(b.name));
     const empty = S.wines.filter((w) => !w.bottles && !openTastingOf(w.id));
@@ -205,7 +263,7 @@
   }
   function sheetWine(id) {
     const w = wine(id); if (!w) return '';
-    const st = status(w), r = REGIONS[w.region], ot = openTastingOf(w.id);
+    const st = status(w), r = REG(w.region), ot = openTastingOf(w.id);
     const ts = S.tastings.filter((t) => t.wineId === id && t.probes.length);
     const best = ts.length ? Math.max(...ts.flatMap((t) => t.probes.map((p) => p.rating || 0))) : 0;
     return `<div class="sheet-bg" data-act="closesheet"><div class="sheet" data-stop="1">
@@ -226,25 +284,255 @@
     </div></div>`;
   }
 
-  // ---------- Sommelier (Platzhalter bis zur Claude-Anbindung) ----------
+  // ---------- Sommelier (Chat mit Claude) ----------
+  const chat = { msgs: loadChat(), busy: false, streaming: '', error: '', draft: '' };
+  function loadChat() { try { const a = JSON.parse(lsGet(LS.chat) || '[]'); return Array.isArray(a) ? a.slice(-40) : []; } catch (e) { return []; } }
+  function saveChat() { lsSet(LS.chat, JSON.stringify(chat.msgs.slice(-40))); }
+
+  // Kontext für Claude: Keller, offene Flaschen, letzte Proben, Profil, Datum
+  function probeLine(t, p, i) {
+    const nose = [...(p.nose || []).map((a) => (aroma(a) || {}).label).filter(Boolean), ...(p.custom || [])].join(', ') || '–';
+    const pal = PAL.map(([k, l]) => `${l} ${p.palate ? p.palate[k] : '?'}/5`).join(', ');
+    return `Probe ${i + 1} (${fmtDur(p.at - t.openedAt)} nach dem Öffnen): ${p.rating ? p.rating + '/5 Punkte' : 'ohne Punkte'}; Nase: ${nose}; ${pal}${p.note ? `; Notiz: „${p.note}“` : ''}`;
+  }
+  function cellarContext() {
+    const now = new Date();
+    const season = { fruehling: 'Frühling', sommer: 'Sommer', lese: 'Herbst (Lese)', winter: 'Winter' }[seasonKey(now)];
+    const L = [`Heute: ${now.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}, ${now.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} Uhr · Jahreszeit: ${season}`];
+    const focus = ui.sommelierWine && wine(ui.sommelierWine);
+    if (focus) L.push(`FOKUS: Max hat das Gespräch über [[${focus.id}]] gestartet.`);
+    const cellar = S.wines.filter((w) => w.bottles > 0 || openTastingOf(w.id));
+    L.push('', `KELLER (${cellar.length} Weine) – id | Name | Weingut | Jahrgang | Farbe | Rebsorten | Region | Flaschen | Status | Trinkfenster | Dekantieren | Temperatur | Glas | Passt zu | Stil`);
+    cellar.forEach((w) => {
+      const r = REG(w.region);
+      L.push(`- ${w.id} | ${w.name} | ${w.producer || ''} | ${w.vintage || 'o. J.'} | ${(COLOR[w.color] || {}).label || ''} | ${w.grapes || ''} | ${r ? `${r.name}, ${r.country}` : ''} | ${w.bottles || 0} | ${status(w).t} | ${w.from && w.to ? `${w.from}–${w.to}${w.est ? ' (geschätzt)' : ''}` : 'unbekannt'} | ${w.decant >= 30 ? w.decant + ' Min' : w.decant > 0 ? 'kurz' : 'nein'} | ${w.temp ? w.temp + ' °C' : ''} | ${w.glass || ''} | ${(w.pairing || []).join(', ')} | ${(w.style || []).join(', ')}`);
+    });
+    const open = S.tastings.filter((t) => !t.done && wine(t.wineId));
+    if (open.length) {
+      L.push('', 'OFFENE FLASCHEN');
+      open.forEach((t) => { L.push(`- [[${t.wineId}]] geöffnet ${clock(t.openedAt)} (vor ${fmtDur(Date.now() - t.openedAt)})`); if (!t.probes.length) L.push('  · noch keine Probe'); t.probes.forEach((p, i) => L.push('  · ' + probeLine(t, p, i))); });
+    }
+    const recent = S.tastings.filter((t) => t.done && wine(t.wineId)).flatMap((t) => t.probes.map((p, i) => ({ t, p, i }))).sort((a, b) => b.p.at - a.p.at).slice(0, 20);
+    if (recent.length) { L.push('', 'LETZTE PROBEN (geleerte Flaschen)'); recent.forEach(({ t, p, i }) => L.push(`- [[${t.wineId}]] ${new Date(p.at).toLocaleDateString('de-DE')}: ${probeLine(t, p, i)}`)); }
+    const P = profileData();
+    if (P.all.length) {
+      L.push('', 'PROFIL', `Netz (1–5): ${P.axes.map(([k, v]) => `${k} ${v.toFixed(1)}`).join(', ')}`, sentence(P.axes));
+      if (P.grapes.length) L.push(`Lieblingsrebsorten: ${P.grapes.map(([k, v]) => `${k} (${v.toFixed(1)})`).join(', ')}`);
+      if (P.regions.length) L.push(`Lieblingsregionen: ${P.regions.map(([k, v]) => `${k} (${v.toFixed(1)})`).join(', ')}`);
+    } else L.push('', 'PROFIL: noch keine Proben.');
+    return L.join('\n');
+  }
+
+  // Antwort formatieren: [[id]] → Wein-Chip, **fett**, Stichpunkte, Absätze
+  function fmtBot(text) {
+    const lines = esc(text).split('\n');
+    return lines.map((l) => {
+      l = l.replace(/\[\[([a-z0-9-]+)\]\]/gi, (m, id) => { const w = wine(id); return w ? `<button class="wchip" data-act="wsheet" data-id="${esc(id)}">${esc(w.name)}${w.vintage ? ' ' + w.vintage : ''}</button>` : ''; })
+        .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+      if (/^\s*[-•*]\s+/.test(l)) return `<span class="li">${l.replace(/^\s*[-•*]\s+/, '')}</span>`;
+      return l.trim() ? `<span class="p">${l}</span>` : '<span class="gap"></span>';
+    }).join('');
+  }
   function vSommelier() {
     const ctx = ui.sommelierWine ? wine(ui.sommelierWine) : null;
-    const qs = ctx ? [`Wann sollte ich den ${ctx.name} öffnen?`, `Was koche ich zum ${ctx.name}?`, `Was ist typisch für ${(REGIONS[ctx.region] || {}).name || 'diese Region'}?`]
+    const head = `<div class="chathead"><div class="emb">${imgTag(ASSETS.sommelier)}</div><h1 class="h1">Dein Sommelier</h1>
+      ${getCode() && (chat.msgs.length || ctx) ? `<button class="minibtn ghost" data-act="chatnew">Neues Gespräch</button>` : ''}</div>`;
+    if (!getCode()) {
+      return `<div class="screen stack">${head}
+        <div class="card stack" style="gap:10px"><b>Zugangscode</b><div class="small muted" style="line-height:1.45">Einmal eingeben, dann ist der Sommelier freigeschaltet – und Etikett-Foto, Bestellung einfügen und die Server-Sicherung gleich mit.</div>
+          <input id="codeIn" class="codein" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Zugangscode">
+          <button class="big" data-act="savecode">Freischalten</button></div></div>`;
+    }
+    const qs = ctx ? [`Wann sollte ich den ${ctx.name} öffnen?`, `Was koche ich zum ${ctx.name}?`, `Was ist typisch für ${(REG(ctx.region) || {}).name || 'diese Region'}?`]
       : ['Wir grillen Lamm – was mach ich auf?', 'Warum riecht ein Wein nach Leder?', 'Was ist der Unterschied zwischen Mencía und Pinot?', 'Welcher Wein ist gerade am besten?'];
-    return `<div class="screen stack" style="align-items:center;text-align:center">
-      <div class="emblem">${imgTag(ASSETS.sommelier)}</div>
-      <div><h1 class="h1" style="font-size:30px">Dein Sommelier</h1>
-        <p class="small" style="color:#4A3F48;line-height:1.5;margin:8px 6px 0">Kennt deinen Keller, deine Proben und deinen Geschmack. Frag ihn, was du heute aufmachst, warum ein Wein so schmeckt oder was zum Essen passt.</p></div>
-      ${ctx ? `<div class="softchip" style="background:var(--berry-soft);color:var(--berry);font-weight:600">Zu: ${esc(ctx.name)} ${ctx.vintage}</div>` : ''}
-      <div class="stack" style="gap:8px;width:100%">${qs.map((q) => `<div class="card" style="text-align:left;font-size:14px;color:#4A3F48">„${esc(q)}“</div>`).join('')}</div>
-      <div class="small muted" style="margin-top:4px">Die Anbindung an Claude kommt im nächsten Schritt.</div>
+    const focus = ctx ? `<div class="focuschip"><button data-act="wsheet" data-id="${ctx.id}">Zu: ${esc(ctx.name)} ${ctx.vintage || ''}</button><button data-act="chatunfocus" aria-label="Bezug entfernen">×</button></div>` : '';
+    const empty = !chat.msgs.length && !chat.busy;
+    const body = empty
+      ? `<div class="chatempty"><p>Kennt deinen Keller, deine Proben und deinen Geschmack. Frag ihn, was du heute aufmachst, warum ein Wein so schmeckt oder was zum Essen passt.</p>${focus}
+          ${chat.error ? `<div class="notice err">${esc(chat.error)}</div>` : ''}
+          <div class="qchips">${qs.map((q) => `<button class="qchip" data-act="ask" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div></div>`
+      : `${focus}<div class="msgs">${chat.msgs.map((m) => `<div class="msg ${m.role === 'user' ? 'me' : 'bot'}">${m.role === 'user' ? esc(m.content).replace(/\n/g, '<br>') : fmtBot(m.content)}</div>`).join('')}
+          ${chat.busy ? `<div class="msg bot" id="live">${chat.streaming ? fmtBot(chat.streaming) : '<span class="typing">schreibt …</span>'}</div>` : ''}
+          ${chat.error ? `<div class="msg err">${esc(chat.error)}</div>` : ''}</div>`;
+    return `<div class="screen chat">${head}${body}</div>
+      <form class="composer" id="composer"><textarea id="chatIn" rows="1" placeholder="Frag deinen Sommelier …" enterkeyhint="send"></textarea>
+        <button type="submit" class="send" aria-label="Senden" ${chat.busy ? 'disabled' : ''}>${I.send}</button></form>`;
+  }
+  function onChatScreen() { return !current() && ui.tab === 'sommelier'; }
+  function renderChat() {
+    if (!onChatScreen()) return;
+    const hadFocus = document.activeElement && document.activeElement.id === 'chatIn';
+    if (!ui.sheet) render();
+    if (hadFocus) { const ci = document.getElementById('chatIn'); if (ci) ci.focus(); }
+  }
+  function paintLive() {
+    const el = document.getElementById('live'); if (!el) return;
+    el.innerHTML = fmtBot(chat.streaming);
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  }
+  async function sendChat(text) {
+    text = String(text || '').trim();
+    if (!text || chat.busy) return;
+    chat.msgs.push({ role: 'user', content: text }); chat.draft = ''; chat.error = ''; chat.busy = true; chat.streaming = '';
+    saveChat(); renderChat();
+    try {
+      const res = await api('chat', { messages: chat.msgs.slice(-40), context: cellarContext() }, { raw: true });
+      const reader = res.body.getReader(), dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const line = buf.slice(0, i); buf = buf.slice(i + 2);
+          if (!line.startsWith('data: ')) continue;
+          const ev = JSON.parse(line.slice(6));
+          if (ev.error) throw new ApiError(ev.error, 0);
+          if (ev.t) { chat.streaming += ev.t; paintLive(); }
+        }
+      }
+      if (!chat.streaming.trim()) throw new ApiError('Keine Antwort bekommen – nochmal versuchen?', 0);
+      chat.msgs.push({ role: 'assistant', content: chat.streaming.trim() });
+    } catch (e) {
+      if (chat.streaming.trim()) chat.msgs.push({ role: 'assistant', content: chat.streaming.trim() + ' …' });
+      else { chat.msgs.pop(); chat.draft = text; } // Frage zurück ins Eingabefeld
+      chat.error = e.message;
+      if (e.status === 401 && getCode()) chat.error = 'Der Zugangscode stimmt nicht mehr – unter Profil → Daten neu eingeben.';
+    } finally {
+      chat.busy = false; chat.streaming = ''; saveChat(); renderChat();
+    }
+  }
+  async function saveCode(inputId) {
+    const inp = document.getElementById(inputId); const v = inp ? inp.value.trim() : '';
+    if (!v) { toast('Bitte den Code eingeben'); return; }
+    try { await api('restore', {}, { code: v }); if (!sync.at) sync.serverNewer = true; }
+    catch (e) { if (e.status === 401) { toast('Der Code stimmt nicht'); return; } if (e.status !== 404) { toast(e.message); return; } }
+    lsSet(LS.code, v); ui.codeEdit = false; ui._keepScroll = true; render(); toast('Freigeschaltet'); scheduleBackup();
+  }
+
+  // ---------- Neue Flaschen: Etikett-Foto, Bestellung, von Hand ----------
+  const normTxt = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\b(weingut|bodegas?|domaines?|domaine|chateau|dominio|adega|cellier|tenuta|cantina|the|de|del|la|le|el|du|des|di|y|und|et)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  function similar(a, b) {
+    a = normTxt(a); b = normTxt(b);
+    if (!a || !b) return false;
+    if (a === b || a.includes(b) || b.includes(a)) return true;
+    const A = new Set(a.split(' ')), B = new Set(b.split(' '));
+    return [...A].filter((x) => B.has(x)).length / Math.min(A.size, B.size) >= 0.6;
+  }
+  const findMatch = (w) => S.wines.find((o) => String(o.vintage || '') === String(w.vintage || '') && similar(o.name, w.name) && (!o.producer || !w.producer || similar(o.producer, w.producer)));
+  const slug = (s) => normTxt(s).replace(/\s+/g, '-').slice(0, 40).replace(/-+$/, '') || 'wein';
+  function uniqueId(base) { let id = base, i = 2; while (wine(id)) id = `${base}-${i++}`; return id; }
+  const intOr = (v, d) => { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : d; };
+  const listOf = (v) => (Array.isArray(v) ? v : String(v || '').split(',')).map((x) => String(x).trim()).filter(Boolean);
+  function cleanWine(x) {
+    return {
+      name: String(x.name || '').trim(), producer: String(x.producer || '').trim(), vintage: intOr(x.vintage, ''),
+      color: ['rot', 'weiss', 'rose'].includes(x.color) ? x.color : 'rot',
+      region: REGIONS[x.region] ? x.region : 'neu', regionName: String(x.regionName || '').trim(), country: String(x.country || '').trim(),
+      grapes: String(x.grapes || '').trim(), from: intOr(x.from, ''), to: intOr(x.to, ''), decant: Math.max(0, parseInt(x.decant, 10) || 0),
+      temp: String(x.temp || '').trim(), glass: String(x.glass || '').trim(), pairing: listOf(x.pairing), style: listOf(x.style),
+      price: Number(x.price) > 0 ? Number(x.price) : '', sku: String(x.sku || '').trim(), estimated: Array.isArray(x.estimated) ? x.estimated : [],
+    };
+  }
+  function loadImg(file) {
+    return new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new ApiError('Das Foto konnte nicht gelesen werden.', 0)); im.src = URL.createObjectURL(file); });
+  }
+  function toJpeg(im, max, q) {
+    const s = Math.min(1, max / Math.max(im.naturalWidth, im.naturalHeight));
+    const c = document.createElement('canvas'); c.width = Math.round(im.naturalWidth * s); c.height = Math.round(im.naturalHeight * s);
+    c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', q);
+  }
+  async function readLabel(file) {
+    if (!file) return;
+    ui.sheet = { t: 'busy', msg: 'Claude liest das Etikett …' }; render();
+    try {
+      const im = await loadImg(file);
+      const big = toJpeg(im, 1600, 0.85), thumb = toJpeg(im, 600, 0.8);
+      const r = await api('label', { image: big.split(',')[1] });
+      if (!r.wines || !r.wines.length) throw new ApiError('Auf dem Foto habe ich keinen Wein erkannt.', 0);
+      startReview(r.wines, 'label', thumb);
+    } catch (e) { ui.sheet = { t: 'add', err: e.message }; render(); }
+  }
+  async function readOrder() {
+    const v = ((document.getElementById('orderIn') || {}).value || '').trim();
+    if (!v) { toast('Bitte Mail-Text oder Link einfügen'); return; }
+    ui.sheet = { t: 'busy', msg: 'Claude liest die Bestellung …' }; render();
+    try {
+      const r = await api('order', /^https?:\/\/\S+$/i.test(v) ? { url: v } : { text: v });
+      if (!r.wines || !r.wines.length) throw new ApiError('In dem Text habe ich keine Weine gefunden.', 0);
+      startReview(r.wines, 'order', null);
+    } catch (e) { ui.sheet = { t: 'addorder', err: e.message, text: v }; render(); }
+  }
+  function startReview(list, source, photo) {
+    ui.review = { source, items: list.map((x) => { const w = cleanWine(x); const m = findMatch(w); return { w, take: true, n: Math.max(1, intOr(x.bottles, 1)), match: m ? m.id : null, photo }; }) };
+    ui.sheet = null; ui.tab = 'keller'; ui.stack = [{ v: 'review' }]; render();
+  }
+  function reviewCard(it, i) {
+    const w = it.w, ex = it.match ? wine(it.match) : null;
+    const est = (f) => ((w.estimated || []).includes(f) ? '<span class="est">geschätzt</span>' : '');
+    const fld = (f, label, val, attrs = '') => `<div class="field"><label>${label}${est(f)}</label><input data-rv="${i}" data-f="${f}" value="${esc(val ?? '')}" ${attrs}></div>`;
+    const prev = { ...w, id: 'rv' + i, img: it.photo || (w.sku ? LB_WEB(w.sku + 'fl_o') : ''), photo: !!it.photo };
+    const head = `<div class="rvhead">${bigLabel(ex || prev, 60, 78)}<div class="rvt"><b>${esc(w.name || 'Ohne Namen')}${w.vintage ? ' ' + w.vintage : ''}</b><span class="small muted">${esc(w.producer || '')}</span>
+        ${ex ? `<span class="pill p-ok">schon im Keller – +${it.n}</span>` : ''}</div>
+      <label class="take"><input type="checkbox" data-rv="${i}" data-f="take" ${it.take ? 'checked' : ''}>übernehmen</label></div>`;
+    const stepper = `<div class="stepper"><span>Flaschen</span><button data-act="rvn" data-i="${i}" data-d="-1" aria-label="Eine weniger">−</button><b>${it.n}</b><button data-act="rvn" data-i="${i}" data-d="1" aria-label="Eine mehr">+</button></div>`;
+    if (ex) return `<div class="card rv ${it.take ? '' : 'off'}">${head}${stepper}<button class="link" data-act="rvnew" data-i="${i}">Ist ein anderer Wein – neu anlegen</button></div>`;
+    const regOpts = Object.entries(REGIONS).map(([id, r]) => `<option value="${id}" ${w.region === id ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
+    return `<div class="card rv ${it.take ? '' : 'off'}">${head}${stepper}
+      ${fld('name', 'Name', w.name)}${fld('producer', 'Weingut', w.producer)}
+      <div class="row">${fld('vintage', 'Jahrgang', w.vintage, 'inputmode="numeric"')}
+        <div class="field"><label>Farbe${est('color')}</label><select data-rv="${i}" data-f="color">${[['rot', 'Rot'], ['weiss', 'Weiß'], ['rose', 'Rosé']].map(([v, l]) => `<option value="${v}" ${w.color === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
+      <div class="field"><label>Region${est('region')}</label><select data-rv="${i}" data-f="region"><option value="neu" ${w.region === 'neu' ? 'selected' : ''}>Neue Region …</option>${regOpts}</select></div>
+      ${w.region === 'neu' ? `<div class="row">${fld('regionName', 'Region', w.regionName, 'placeholder="z. B. Mosel"')}${fld('country', 'Land', w.country)}</div>` : ''}
+      ${fld('grapes', 'Rebsorten', w.grapes)}
+      <div class="row">${fld('from', 'Trinkreif ab', w.from, 'inputmode="numeric"')}${fld('to', 'bis', w.to, 'inputmode="numeric"')}</div>
+      <div class="row">${fld('decant', 'Dekantieren (Min)', w.decant, 'inputmode="numeric"')}${fld('temp', 'Temperatur °C', w.temp)}</div>
+      ${fld('glass', 'Glas', w.glass)}${fld('pairing', 'Passt zu', w.pairing.join(', '))}${fld('style', 'Stil', w.style.join(', '))}
+      ${fld('price', 'Preis pro Flasche (€)', w.price, 'inputmode="decimal"')}
     </div>`;
+  }
+  function vReview() {
+    const R = ui.review; if (!R) return vKeller();
+    const total = R.items.filter((it) => it.take).reduce((n, it) => n + it.n, 0);
+    return `<div class="screen stack">
+      <div class="row" style="gap:12px"><button class="iconbtn" data-act="reviewcancel" aria-label="Verwerfen">${I.back}</button>
+        <div><div class="kicker">${R.source === 'label' ? 'Vom Etikett' : 'Aus der Bestellung'} · ${R.items.length} ${R.items.length === 1 ? 'Wein' : 'Weine'}</div><h1 class="h1" style="font-size:28px">Stimmt das so?</h1></div></div>
+      <p class="small" style="color:#4A3F48;margin:-4px 0 0;line-height:1.45">Alles lässt sich korrigieren. <span class="est">geschätzt</span> heißt: stand nicht drauf, Claude hat es eingeschätzt.</p>
+      ${R.items.map(reviewCard).join('')}
+      <button class="big" data-act="reviewsave" id="rvsave" ${total ? '' : 'disabled'}>${total} ${total === 1 ? 'Flasche' : 'Flaschen'} in den Keller</button>
+      <button class="link" data-act="reviewcancel" style="width:100%">Verwerfen</button></div>`;
+  }
+  function commitReview() {
+    const R = ui.review; if (!R) return;
+    let n = 0;
+    R.items.filter((it) => it.take && it.n > 0).forEach((it) => {
+      const ex = it.match && wine(it.match);
+      n += it.n;
+      if (ex) { ex.bottles = (ex.bottles || 0) + it.n; return; }
+      const w = it.w;
+      const region = w.region === 'neu' ? (w.regionName ? 'x-' + slug(w.regionName) : '') : w.region;
+      const nw = {
+        id: uniqueId(slug(`${w.name} ${w.vintage ? String(w.vintage).slice(-2) : ''}`)), name: w.name || 'Wein', producer: w.producer, vintage: w.vintage || '', color: w.color, region,
+        grapes: w.grapes, from: w.from || null, to: w.to || null, est: (w.estimated || []).some((f) => f === 'from' || f === 'to'), decant: w.decant || 0, temp: w.temp, glass: w.glass,
+        pairing: w.pairing, style: w.style, critic: { src: '', words: [], ids: [] }, estimated: w.estimated, bottles: it.n, addedAt: Date.now(),
+      };
+      if (region.startsWith('x-')) { nw.regionName = w.regionName; nw.country = w.country; }
+      if (w.price) nw.price = Number(w.price);
+      if (it.photo) { nw.img = it.photo; nw.photo = true; }
+      else if (w.sku) { nw.sku = w.sku; nw.img = LB_WEB(w.sku + 'fl_o'); nw.url = 'https://www.gute-weine.de/' + w.sku; }
+      S.wines.push(nw);
+    });
+    save(); ui.review = null; ui.stack = []; ui.tab = 'keller'; render();
+    toast(`${n} ${n === 1 ? 'Flasche' : 'Flaschen'} im Keller`);
   }
 
   // ---------- Weinkarte ----------
   function vWine(id) {
     const w = wine(id); if (!w) return vKeller();
-    const r = REGIONS[w.region], st = status(w), y = NOW_YEAR();
+    const r = REG(w.region), st = status(w), y = NOW_YEAR();
     const lo = Math.min(w.from || y, y) - 2, hi = Math.max(w.to || y, y) + 2, span = hi - lo;
     const pct = (v) => ((v - lo) / span) * 100;
     const ts = S.tastings.filter((t) => t.wineId === id && t.probes.length);
@@ -392,20 +680,20 @@
     const used = {};
     S.wines.forEach((w) => { if (!w.region) return; used[w.region] = used[w.region] || { bottles: 0, wines: 0, tasted: false }; used[w.region].bottles += w.bottles || 0; used[w.region].wines++; });
     S.tastings.forEach((t) => { const w = wine(t.wineId); if (w && used[w.region] && t.probes.length) used[w.region].tasted = true; });
-    const ids = Object.keys(used).sort((a, b) => used[b].bottles - used[a].bottles || REGIONS[a].name.localeCompare(REGIONS[b].name));
+    const ids = Object.keys(used).filter((i) => REG(i)).sort((a, b) => used[b].bottles - used[a].bottles || REG(a).name.localeCompare(REG(b).name));
     const stamped = ids.filter((i) => used[i].tasted).length;
     return `<div class="screen"><div class="top"><div><div class="kicker">Postkarten-Sammlung · ${stamped}/${ids.length} gestempelt</div><h1 class="h1">Deine Regionen</h1></div></div>
       <p class="small" style="color:#4A3F48;margin:-4px 0 14px">Jede Region eine Karte. Verkostest du einen Wein von dort, bekommt sie einen Stempel.</p>
-      <div class="pcgrid">${ids.map((id) => { const r = REGIONS[id], u = used[id]; return `<button class="pc ${u.bottles ? '' : 'dim'}" data-act="region" data-id="${id}">
+      <div class="pcgrid">${ids.map((id) => { const r = REG(id), u = used[id]; return `<button class="pc ${u.bottles ? '' : 'dim'}" data-act="region" data-id="${id}">
         <div class="im">${regionImg(id)}${u.tasted ? `<div class="stamp">${I.check}</div>` : ''}${learnedRegions().has(id) ? '<span class="learned">gelernt</span>' : ''}</div>
         <div class="nm"><b>${esc(r.name)}</b><span class="small muted">${esc(r.country)} · ${u.bottles} ${u.bottles === 1 ? 'Flasche' : 'Flaschen'}</span></div></button>`; }).join('')}</div></div>`;
   }
   function sheetRegion(id) {
-    const r = REGIONS[id]; if (!r) return '';
+    const r = REG(id); if (!r) return '';
     const ws = S.wines.filter((w) => w.region === id);
     return `<div class="sheet-bg" data-act="closesheet"><div class="sheet" data-stop="1">
       <div class="strip" style="height:170px;margin:-4px 0 14px">${regionImg(id)}</div>
-      <h2 style="font-size:24px">${esc(r.name)}</h2><div class="small muted">${esc(r.country)} · ${esc(r.area)}</div>
+      <h2 style="font-size:24px">${esc(r.name)}</h2><div class="small muted">${esc([r.country, r.area].filter((x, i, a) => x && a.indexOf(x) === i).join(" · "))}</div>
       <p style="line-height:1.5;color:#4A3F48">${esc(r.text)}</p>
       <div class="list">${ws.map((w) => `<button class="wrow" data-act="wine" data-id="${w.id}">${bigLabel(w, 38, 50)}<div class="t"><div class="n">${esc(w.name)}</div><div class="m">${esc(w.producer)} · ${w.bottles ? w.bottles + ' im Keller' : 'ausgetrunken'}</div></div><span class="yr">${w.vintage}</span></button>`).join('')}</div>
       <button class="big dark" style="margin-top:14px" data-act="closesheet">Schließen</button></div></div>`;
@@ -429,7 +717,7 @@
       return Object.entries(m).map(([k, v]) => [k, v.reduce((a, b) => a + b, 0) / v.length, v.length]).sort((a, b) => b[1] - a[1]).slice(0, 4);
     };
     const counts = {}; all.forEach((p) => (p.nose || []).forEach((a) => (counts[a] = (counts[a] || 0) + 1)));
-    return { all, base, axes, grapes: groups((w) => (w.grapes || '').split(/[,(]|\s\d/)[0].trim()), regions: groups((w) => (REGIONS[w.region] || {}).name), top: Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 6) };
+    return { all, base, axes, grapes: groups((w) => (w.grapes || '').split(/[,(]|\s\d/)[0].trim()), regions: groups((w) => (REG(w.region) || {}).name), top: Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 6) };
   }
   function radar(axes) {
     const cx = 120, cy = 112, R = 88, n = axes.length;
@@ -453,20 +741,57 @@
     const nT = S.tastings.filter((t) => t.probes.length).length;
     const favBlock = (title, arr) => arr.length ? `<div class="card favs"><b style="font-size:14px">${title}</b>${arr.map(([k, v, c]) => `<div class="f"><span>${esc(k)}</span><div class="bar"><i style="width:${v * 20}%;background:var(--berry)"></i></div><em>${v.toFixed(1).replace('.', ',')}</em></div>`).join('')}</div>` : '';
     return `<div class="screen stack">
-      <div><div class="kicker">${nT} ${nT === 1 ? 'Flasche' : 'Flaschen'} verkostet · ${P.all.length} Proben</div><h1 class="h1">Dein Geschmack</h1></div>
+      <div><div class="kicker">${nT} ${nT === 1 ? 'Flasche' : 'Flaschen'} verkostet · ${P.all.length} ${P.all.length === 1 ? "Probe" : "Proben"}</div><h1 class="h1">Dein Geschmack</h1></div>
       ${schoolCard()}
       ${P.all.length ? `<div class="card" style="text-align:center">${radar(P.axes)}<div class="small" style="color:#4A3F48;margin-top:4px">${esc(sentence(P.axes))}</div>
         <div class="small muted" style="margin-top:4px">${P.base.length === P.all.length ? 'aus allen Proben' : 'aus den Proben mit 4 oder 5 Punkten'}</div></div>`
         : `<div class="empty">Nach der ersten Verkostung wächst hier dein Profil – Netz, Lieblingsrebsorten, Lieblingsregionen.</div>`}
       ${favBlock('Lieblingsrebsorten', P.grapes)}${favBlock('Lieblingsregionen', P.regions)}
       ${P.top.length ? `<div class="card"><b style="font-size:14px">Was du am häufigsten riechst</b><div class="wrapchips" style="margin-top:8px">${P.top.map(([a, c]) => `<span class="softchip" style="background:var(--bg)">${esc((aroma(a) || {}).label)} · ${c}</span>`).join('')}</div></div>` : ''}
-      <div class="card"><b style="font-size:14px">Daten</b><div class="small muted" style="margin:4px 0 10px">Alles liegt nur auf diesem Gerät. Ab und zu sichern.</div>
-        <div class="btns"><button class="btn" data-act="export">Sichern</button><button class="btn" data-act="import">Einspielen</button></div></div>
+      ${dataCard()}
     </div>`;
+  }
+  function dataCard() {
+    const code = getCode();
+    const when = sync.at ? new Date(sync.at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    const codeBox = !code || ui.codeEdit
+      ? `<div class="field" style="margin:12px 0 0"><label>Zugangscode</label><div class="row"><input id="codeIn2" class="codein" style="flex:1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Zugangscode"><button class="minibtn" data-act="savecode2">Speichern</button></div></div>`
+      : `<div class="small muted" style="margin-top:10px">Zugangscode ist eingetragen · <button class="link inline" data-act="codeedit">ändern</button></div>`;
+    return `<div class="card"><b style="font-size:14px">Daten</b>
+      <div class="small muted" style="margin:4px 0 10px;line-height:1.45">${code ? `Liegt auf diesem Gerät und wird automatisch auf dem Server gesichert${when ? ` – zuletzt ${when}` : ''}.${sync.err ? ` <span style="color:var(--berry)">${esc(sync.err)}</span>` : ''}` : 'Alles liegt nur auf diesem Gerät. Ab und zu sichern – oder Zugangscode eintragen, dann sichert die App automatisch auf dem Server.'}</div>
+      ${code && sync.serverNewer ? `<div class="notice">Auf dem Server liegt schon eine Sicherung. Willst du sie auf dieses Gerät holen – oder den Stand von diesem Gerät auf den Server legen?
+        <div class="btns" style="margin-top:8px"><button class="btn" data-act="srvpush">${ui.confirmPush ? 'Wirklich? Nochmal tippen' : 'Dieses Gerät sichern'}</button></div></div>` : ''}
+      <div class="btns"><button class="btn" data-act="export">Sichern</button><button class="btn" data-act="import">Einspielen</button></div>
+      ${code ? `<button class="btn" style="width:100%;margin-top:8px" data-act="srvrestore">${ui.confirmRestore ? 'Ersetzt alles hier – nochmal tippen' : 'Vom Server wiederherstellen'}</button>` : ''}
+      ${codeBox}</div>`;
   }
 
   // ---------- Sheets ----------
   function sheetAdd() {
+    const has = !!getCode(), err = ui.sheet && ui.sheet.err;
+    return `<div class="sheet-bg" data-act="closesheet"><div class="sheet" data-stop="1"><h2 style="font-size:22px;margin-bottom:12px">Neue Flaschen</h2>
+      ${err ? `<div class="notice err">${esc(err)}</div>` : ''}
+      <div class="addways">
+        ${has ? `<label class="addway">${I.camera}<span><b>Etikett fotografieren</b><em>Claude liest Weingut, Jahrgang, Rebsorte …</em></span><input id="labelIn" type="file" accept="image/*" capture="environment" hidden></label>`
+          : `<button class="addway off" data-act="needcode">${I.camera}<span><b>Etikett fotografieren</b><em>Zuerst Zugangscode eintragen</em></span></button>`}
+        <button class="addway ${has ? '' : 'off'}" data-act="${has ? 'addorder' : 'needcode'}">${I.doc}<span><b>Bestellung einfügen</b><em>${has ? 'Mail-Text oder Link von Lobenberg' : 'Zuerst Zugangscode eintragen'}</em></span></button>
+        <button class="addway" data-act="addmanual">${I.pen}<span><b>Von Hand</b><em>Formular ausfüllen</em></span></button>
+      </div>
+      <button class="link" style="width:100%" data-act="closesheet">Abbrechen</button></div></div>`;
+  }
+  function sheetOrder() {
+    const err = ui.sheet && ui.sheet.err;
+    return `<div class="sheet-bg" data-act="closesheet"><div class="sheet" data-stop="1"><h2 style="font-size:22px;margin-bottom:6px">Bestellung einfügen</h2>
+      <p class="small muted" style="margin:0 0 10px;line-height:1.45">Die Bestellbestätigung von Lobenberg kopieren und hier einfügen – oder einen Link von gute-weine.de.</p>
+      ${err ? `<div class="notice err">${esc(err)}</div>` : ''}
+      <div class="field"><textarea id="orderIn" style="height:180px" placeholder="Text der Bestellmail oder https://www.gute-weine.de/…">${esc((ui.sheet && ui.sheet.text) || '')}</textarea></div>
+      <button class="big" data-act="readorder">Auslesen</button><button class="link" style="width:100%" data-act="add">Zurück</button></div></div>`;
+  }
+  function sheetBusy() {
+    return `<div class="sheet-bg"><div class="sheet" data-stop="1" style="text-align:center;padding-top:34px;padding-bottom:calc(40px + var(--safe-bot))">
+      <div class="spin"></div><b style="display:block;margin-top:14px">${esc(ui.sheet.msg)}</b><div class="small muted" style="margin-top:4px">dauert ein paar Sekunden</div></div></div>`;
+  }
+  function sheetAddManual() {
     const opts = Object.entries(REGIONS).map(([id, r]) => `<option value="${id}">${esc(r.name)} (${esc(r.country)})</option>`).join('');
     return `<div class="sheet-bg" data-act="closesheet"><div class="sheet" data-stop="1"><h2 style="font-size:22px;margin-bottom:12px">Flasche hinzufügen</h2>
       <div class="field"><label>Name</label><input id="f-name" placeholder="z. B. Château Laroque"></div>
@@ -555,7 +880,7 @@
     const ws = S.wines.filter((w) => w.bottles > 0 || openTastingOf(w.id));
     const pool = [];
     ws.forEach((w) => {
-      const r = REGIONS[w.region], nm = `${w.name} ${w.vintage}`;
+      const r = REG(w.region), nm = `${w.name} ${w.vintage}`;
       const g = mainGrape(w);
       if (g) {
         const col = w.color === 'weiss' ? 'weiss' : 'rot';
@@ -707,17 +1032,21 @@
   function render() {
     const c = current();
     let body;
-    if (c) body = { wine: vWine, tasting: vTasting, probe: vProbe, schule: vSchule, quiz: vQuiz, mini: vMini }[c.v](c.id);
+    if (c) body = { wine: vWine, tasting: vTasting, probe: vProbe, schule: vSchule, quiz: vQuiz, mini: vMini, review: vReview }[c.v](c.id);
     else body = { keller: vKeller, offen: vOffen, regionen: vRegionen, sommelier: vSommelier, profil: vProfil }[ui.tab]();
     let sheet = '';
-    if (ui.sheet) sheet = ui.sheet.t === 'wine' ? sheetWine(ui.sheet.id) : ui.sheet.t === 'region' ? sheetRegion(ui.sheet.id) : ui.sheet.t === 'add' ? sheetAdd() : ui.sheet.t === 'export' ? sheetExport() : sheetImport();
+    if (ui.sheet) sheet = ({ wine: () => sheetWine(ui.sheet.id), region: () => sheetRegion(ui.sheet.id), add: sheetAdd, addmanual: sheetAddManual, addorder: sheetOrder, busy: sheetBusy, export: sheetExport, import: sheetImport }[ui.sheet.t] || (() => ''))();
     const keepScroll = ui._keepScroll; ui._keepScroll = false;
     const y = window.scrollY;
-    $app.innerHTML = body + (c && ['probe', 'quiz', 'mini'].includes(c.v) ? '' : tabsHtml()) + sheet;
-    if (keepScroll) window.scrollTo(0, y); else if (!ui.sheet) window.scrollTo(0, ui._scrollTo || 0);
+    $app.innerHTML = body + (c && ['probe', 'quiz', 'mini', 'review'].includes(c.v) ? '' : tabsHtml()) + sheet;
+    if (keepScroll) window.scrollTo(0, y);
+    else if (onChatScreen() && !ui.sheet) window.scrollTo(0, document.documentElement.scrollHeight);
+    else if (!ui.sheet) window.scrollTo(0, ui._scrollTo || 0);
     ui._scrollTo = 0;
     const ci = document.getElementById('customIn'); if (ci) ci.focus();
+    const chi = document.getElementById('chatIn'); if (chi) { chi.value = chat.draft || ''; growInput(chi); }
   }
+  function growInput(el) { el.style.height = 'auto'; el.style.height = Math.min(140, el.scrollHeight) + 'px'; }
   function push(v, id) { ui.stack.push({ v, id }); ui.sheet = null; render(); }
   function back() { ui.stack.pop(); ui.draft = null; render(); }
 
@@ -764,13 +1093,42 @@
       case 'filter': ui.filter = id; ui.expanded = null; render(); break;
       case 'wsheet': ui.sheet = { t: 'wine', id }; ui._keepScroll = true; render(); break;
       case 'search': ui.searchOpen = !ui.searchOpen; if (!ui.searchOpen) ui.q = ''; ui._keepScroll = true; render(); { const q = document.getElementById('q'); if (q) q.focus(); } break;
-      case 'askSommelier': ui.sommelierWine = id; ui.sheet = null; ui.stack = []; ui.tab = 'sommelier'; render(); break;
+      case 'askSommelier': // neues Gespräch zu genau dieser Flasche
+        if (!chat.busy) { chat.msgs = []; chat.error = ''; chat.draft = ''; saveChat(); }
+        ui.sommelierWine = id; ui.sheet = null; ui.stack = []; ui.tab = 'sommelier'; render(); break;
       case 'toggleEmpty': ui.showEmpty = !ui.showEmpty; ui._keepScroll = true; render(); break;
       case 'wine': ui.sheet = null; push('wine', id); break;
       case 'tasting': push('tasting', id); break;
       case 'probe': push('probe', id); break;
       case 'open': openBottle(id); break;
       case 'undoopen': undoOpen(id); break;
+      // Sommelier
+      case 'chatnew': chat.msgs = []; chat.error = ''; chat.draft = ''; ui.sommelierWine = null; saveChat(); render(); break;
+      case 'chatunfocus': ui.sommelierWine = null; render(); break;
+      case 'ask': sendChat(el.dataset.q); break;
+      case 'savecode': saveCode('codeIn'); break;
+      case 'savecode2': saveCode('codeIn2'); break;
+      case 'codeedit': ui.codeEdit = true; ui._keepScroll = true; render(); break;
+      case 'needcode': ui.sheet = null; ui.stack = []; ui.tab = 'sommelier'; render(); break;
+      // Neue Flaschen
+      case 'addmanual': ui.sheet = { t: 'addmanual' }; ui._keepScroll = true; render(); break;
+      case 'addorder': ui.sheet = { t: 'addorder' }; ui._keepScroll = true; render(); { const o = document.getElementById('orderIn'); if (o) o.focus(); } break;
+      case 'readorder': readOrder(); break;
+      case 'rvn': { const it = ui.review.items[parseInt(el.dataset.i, 10)]; it.n = Math.max(1, it.n + parseInt(el.dataset.d, 10)); ui._keepScroll = true; render(); break; }
+      case 'rvnew': ui.review.items[parseInt(el.dataset.i, 10)].match = null; ui._keepScroll = true; render(); break;
+      case 'reviewsave': commitReview(); break;
+      case 'reviewcancel': ui.review = null; ui.stack = []; render(); break;
+      // Server-Sicherung
+      case 'srvrestore':
+        if (!ui.confirmRestore) { ui.confirmRestore = true; ui._keepScroll = true; render(); setTimeout(() => { ui.confirmRestore = false; }, 5000); break; }
+        ui.confirmRestore = false;
+        restoreFromServer().then(() => { ui.stack = []; ui.tab = 'profil'; ui._keepScroll = true; render(); toast('Vom Server wiederhergestellt'); }).catch((err) => { ui._keepScroll = true; render(); toast(err.message); });
+        break;
+      case 'srvpush':
+        if (!ui.confirmPush) { ui.confirmPush = true; ui._keepScroll = true; render(); setTimeout(() => { ui.confirmPush = false; }, 5000); break; }
+        ui.confirmPush = false;
+        doBackup(true).then(() => { ui._keepScroll = true; render(); toast(sync.err || 'Auf dem Server gesichert'); });
+        break;
       case 'region': ui.sheet = { t: 'region', id }; ui._keepScroll = true; render(); break;
       case 'closesheet': ui.sheet = null; ui._keepScroll = true; render(); break;
       case 'add': ui.sheet = { t: 'add' }; ui._keepScroll = true; render(); break;
@@ -822,13 +1180,43 @@
     if (k && ui.draft) { ui.draft.palate[k] = parseInt(e.target.value, 10); const w = document.getElementById('w-' + k); if (w) w.textContent = WORDS[k][ui.draft.palate[k] - 1]; }
     if (e.target.id === 'note' && ui.draft) ui.draft.note = e.target.value;
     if (e.target.id === 'tempIn' && ui.quiz) { ui.quiz.temp = parseInt(e.target.value, 10); const tv = document.getElementById('tempVal'); if (tv) tv.textContent = ui.quiz.temp + ' °C'; }
+    if (e.target.id === 'chatIn') { chat.draft = e.target.value; growInput(e.target); }
+    if (e.target.dataset && e.target.dataset.rv && e.target.tagName === 'INPUT' && e.target.type !== 'checkbox') reviewField(e.target);
   });
+  // Bestätigungsansicht: Eingaben direkt in den Entwurf übernehmen (Neuzeichnen verliert sonst Getipptes)
+  function reviewField(el) {
+    const it = ui.review && ui.review.items[parseInt(el.dataset.rv, 10)]; if (!it) return;
+    const f = el.dataset.f, v = el.value;
+    if (f === 'take') it.take = el.checked;
+    else if (['vintage', 'from', 'to'].includes(f)) it.w[f] = intOr(v, '');
+    else if (f === 'decant') it.w[f] = Math.max(0, parseInt(v, 10) || 0);
+    else if (f === 'price') it.w[f] = parseFloat(String(v).replace(',', '.')) || '';
+    else if (f === 'pairing' || f === 'style') it.w[f] = listOf(v);
+    else it.w[f] = v;
+  }
+  $app.addEventListener('change', (e) => {
+    if (e.target.id === 'labelIn') { const f = e.target.files && e.target.files[0]; e.target.value = ''; readLabel(f); return; }
+    if (e.target.dataset && e.target.dataset.rv && (e.target.tagName === 'SELECT' || e.target.type === 'checkbox')) { reviewField(e.target); ui._keepScroll = true; render(); }
+  });
+  $app.addEventListener('submit', (e) => {
+    if (e.target.id !== 'composer') return;
+    e.preventDefault(); const ci = document.getElementById('chatIn'); sendChat(ci ? ci.value : '');
+  });
+  // Tastatur am iPhone: Eingabefeld über der Tastatur halten, Leiste solange ausblenden
+  if (window.visualViewport) {
+    const vv = window.visualViewport;
+    const upd = () => { const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)); document.documentElement.style.setProperty('--kb', kb + 'px'); document.body.classList.toggle('kbd', kb > 80); };
+    vv.addEventListener('resize', upd); vv.addEventListener('scroll', upd);
+  }
   function commitCustom(inp) {
     const v = inp.value.trim(); ui.draft.adding = false;
     if (v) ui.draft.custom.push(v);
     ui._keepScroll = true; render();
   }
-  $app.addEventListener('keydown', (e) => { if (e.target.id === 'customIn' && e.key === 'Enter') { e.preventDefault(); commitCustom(e.target); } });
+  $app.addEventListener('keydown', (e) => {
+    if (e.target.id === 'customIn' && e.key === 'Enter') { e.preventDefault(); commitCustom(e.target); }
+    if (e.target.id === 'chatIn' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendChat(e.target.value); }
+  });
   $app.addEventListener('focusout', (e) => { if (e.target.id === 'customIn' && ui.draft && ui.draft.adding) setTimeout(() => { if (ui.draft && ui.draft.adding) commitCustom(e.target); }, 0); });
 
   // laufende Uhren
