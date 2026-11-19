@@ -20,8 +20,23 @@
 <script src="schule-data.js"></script>
 <script src="app.js"></script>
 <script>
+  // Offline-Cache + automatische Updates: beim Öffnen und beim Zurückholen aus dem Hintergrund nach
+  // einer neuen Version schauen. Ist sie da, neu laden – sofort, wenn die App gerade erst geöffnet wurde,
+  // sonst beim nächsten Wechsel in den Hintergrund (damit nichts Getipptes verloren geht).
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    try { navigator.serviceWorker.register('sw.js').catch(function () {}); } catch (e) {}
+    try {
+      var hadCtrl = !!navigator.serviceWorker.controller, freshAt = Date.now(), pending = false, reg = null;
+      navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (r) { reg = r; }).catch(function () {});
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (!hadCtrl) { hadCtrl = true; return; }
+        if (Date.now() - freshAt < 8000) location.reload(); else pending = true;
+      });
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') { if (pending) location.reload(); return; }
+        freshAt = Date.now();
+        if (reg) reg.update().catch(function () {});
+      });
+    } catch (e) {}
   }
 </script>
 </body>
